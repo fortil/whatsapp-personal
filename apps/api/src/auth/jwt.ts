@@ -4,9 +4,10 @@ import { SignJWT, jwtVerify } from 'jose'
  * JWT HS256 con scopes asimétricos: un token de un scope NO sirve en las
  * rutas de otro. `preauth` solo autoriza /auth/login/verify; `trusted` solo
  * sirve de atajo en el login; las sesiones llevan `user` o `admin` según el
- * rol al emitirlas.
+ * rol al emitirlas. `gstate` es el state del OAuth de Google: vive 10 minutos
+ * y solo autoriza /google/callback, nunca una sesión.
  */
-export type TokenScope = 'user' | 'admin' | 'preauth' | 'trusted'
+export type TokenScope = 'user' | 'admin' | 'preauth' | 'trusted' | 'gstate'
 
 export interface TokenPayload {
   sub: string
@@ -45,7 +46,9 @@ export async function verifyToken(secret: string, token: string | undefined): Pr
   try {
     const { payload } = await jwtVerify(token, secretKey(secret))
     const scope = payload.scope
-    if (scope !== 'user' && scope !== 'admin' && scope !== 'preauth' && scope !== 'trusted') return null
+    if (scope !== 'user' && scope !== 'admin' && scope !== 'preauth' && scope !== 'trusted' && scope !== 'gstate') {
+      return null
+    }
     if (!payload.sub) return null
     return { sub: payload.sub, scope, jti: typeof payload.jti === 'string' ? payload.jti : undefined }
   } catch {

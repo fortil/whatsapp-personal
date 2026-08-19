@@ -24,6 +24,13 @@ export interface ApiEnv {
   evolutionApiKey: string
   /** URL de esta API alcanzable desde el contenedor de Evolution (webhooks). */
   publicApiUrl: string
+  /** URL del panel: adonde redirige /google/callback tras vincular. */
+  panelUrl: string
+  googleClientId: string
+  googleClientSecret: string
+  googleRedirectUri: string
+  /** 32 bytes hex; cifra los refresh tokens de Google en reposo. */
+  encryptionKey: string
 }
 
 export function readEnv(env: NodeJS.ProcessEnv = process.env): ApiEnv {
@@ -44,6 +51,11 @@ export function readEnv(env: NodeJS.ProcessEnv = process.env): ApiEnv {
     evolutionApiUrl: env.EVOLUTION_API_URL ?? '',
     evolutionApiKey: env.EVOLUTION_API_KEY ?? '',
     publicApiUrl: env.PUBLIC_API_URL ?? '',
+    panelUrl: env.PANEL_URL ?? '',
+    googleClientId: env.GOOGLE_CLIENT_ID ?? '',
+    googleClientSecret: env.GOOGLE_CLIENT_SECRET ?? '',
+    googleRedirectUri: env.GOOGLE_REDIRECT_URI ?? '',
+    encryptionKey: env.ENCRYPTION_KEY ?? '',
   }
 }
 
@@ -56,5 +68,9 @@ export function missingStartupSecrets(env: ApiEnv): string[] {
   const missing: string[] = []
   if (!env.jwtSecret) missing.push('JWT_SECRET')
   if (!env.webhookSecret) missing.push('WEBHOOK_SECRET')
+  // Google configurado a medias no puede arrancar: sin ENCRYPTION_KEY no hay
+  // forma de guardar el refresh token de forma ilegible
+  const anyGoogle = env.googleClientId || env.googleClientSecret || env.googleRedirectUri
+  if (anyGoogle && !env.encryptionKey) missing.push('ENCRYPTION_KEY')
   return missing
 }

@@ -36,12 +36,25 @@ if (!evolution) {
   console.error('[worker] EVOLUTION_API_URL/EVOLUTION_API_KEY ausentes: transcribe fallará con mensaje claro')
 }
 
+// Google para los jobs de cumpleaños; sin él, birthday_* falla con mensaje claro
+const google =
+  env.googleClientId && env.googleClientSecret && env.encryptionKey
+    ? { clientId: env.googleClientId, clientSecret: env.googleClientSecret, encryptionKey: env.encryptionKey }
+    : null
+if (!google) {
+  console.error('[worker] GOOGLE_CLIENT_ID/SECRET o ENCRYPTION_KEY ausentes: los jobs de cumpleaños fallarán con mensaje claro')
+}
+
 // BullMQ exige maxRetriesPerRequest: null en la conexión que usa
 const connection = new Redis(env.redisUrl, { maxRetriesPerRequest: null })
 
-const worker = new Worker(QUEUE_NAME, (job) => processJob(job, { db, evolution, exportDir: env.exportDir }), {
-  connection,
-})
+const worker = new Worker(
+  QUEUE_NAME,
+  (job) => processJob(job, { db, evolution, exportDir: env.exportDir, google }),
+  {
+    connection,
+  },
+)
 
 worker.on('failed', (job, err) => {
   console.error(`[worker] job ${job?.name ?? '?'} (${job?.id ?? '?'}) falló:`, err.message)

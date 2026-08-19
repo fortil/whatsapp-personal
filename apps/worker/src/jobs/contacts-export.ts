@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
-import { and, asc, eq, isNull } from 'drizzle-orm'
+import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 import ExcelJS from 'exceljs'
 import { contacts, conversations, getDb, taskRuns, type Db } from '@wp/db'
 import type { EvolutionClient } from '@wp/channels'
@@ -48,7 +48,9 @@ export async function conversationIdForContact(
       .select({ id: conversations.id })
       .from(conversations)
       .where(and(eq(conversations.userId, userId), eq(conversations.contactId, contact.id)))
-      .orderBy(asc(conversations.lastMessageAt))
+      // nulls last: last_message_at puede ser null (conversación sin mensajes)
+      // y en Postgres el desc plano pone los null primero
+      .orderBy(sql`${conversations.lastMessageAt} desc nulls last`)
       .limit(1)
   )[0]
   return any?.id ?? null

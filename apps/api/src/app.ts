@@ -14,6 +14,7 @@ import { registerAdminRoutes } from './routes/admin.js'
 import { registerAuthRoutes, type RouteDeps } from './routes/auth.js'
 import { registerChannelRoutes } from './routes/channel.js'
 import { registerContactRoutes } from './routes/contacts.js'
+import { registerGoogleRoutes } from './routes/google.js'
 import { registerInboxRoutes } from './routes/inbox.js'
 import { registerTaskRoutes } from './routes/tasks.js'
 import { registerWebhookRoutes } from './routes/webhooks.js'
@@ -95,6 +96,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   registerChannelRoutes(app, deps)
   registerInboxRoutes(app, deps)
   registerContactRoutes(app, deps)
+  registerGoogleRoutes(app, deps)
   registerTaskRoutes(app, deps)
   // público, sin JWT: la autenticidad la da el header x-webhook-secret
   registerWebhookRoutes(app, { db, env, taskQueue: opts.taskQueue })

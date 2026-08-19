@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
@@ -231,5 +231,30 @@ describe('sweepOldExports', () => {
     expect(removed).toBe(0)
     const after = (await db.select().from(taskRuns).where(eq(taskRuns.id, row!.id)).limit(1))[0]!
     expect(after.filePath).toBeNull()
+  })
+
+  it('archivo inaccesible por permisos no se trata como inexistente: file_path queda', async () => {
+    exportDir = await mkdtemp(path.join(tmpdir(), 'wp-export-'))
+    const lockedDir = path.join(exportDir, `${userId}-locked`)
+    await mkdir(lockedDir, { recursive: true })
+    const lockedFile = path.join(lockedDir, 'viejo.xlsx')
+    await writeFile(lockedFile, 'contenido viejo')
+    const oldTime = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000)
+    await utimes(lockedFile, oldTime, oldTime)
+    await chmod(lockedDir, 0o000) // stat del archivo de adentro da EACCES
+
+    try {
+      const [row] = await db
+        .insert(taskRuns)
+        .values({ userId, kind: 'contacts_export', status: 'done', filePath: lockedFile })
+        .returning()
+
+      const removed = await sweepOldExports(db, exportDir, 30 * 24 * 60 * 60 * 1000)
+      expect(removed).toBe(0)
+      const after = (await db.select().from(taskRuns).where(eq(taskRuns.id, row!.id)).limit(1))[0]!
+      expect(after.filePath).toBe(lockedFile)
+    } finally {
+      await chmod(lockedDir, 0o755) // sin esto, rm -r del afterEach también falla
+    }
   })
 })

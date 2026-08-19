@@ -61,8 +61,10 @@ export async function sweepStuckTaskRuns(
 /**
  * Archivos de EXPORT_DIR con más de maxAgeMs: se borran y se limpia el
  * file_path de su task_run. También limpia los file_path que apuntan a
- * archivos que ya no existen (disco limpiado a mano). Devuelve cuántos
- * archivos borró.
+ * archivos que ya no existen (disco limpiado a mano). Un fallo de stat que
+ * NO sea "no existe" (permisos, disco caído) deja la fila como estaba: tratar
+ * cualquier error como archivo inexistente dejaba huérfano un archivo que
+ * solo estaba inaccesible ese ciclo.
  */
 export async function sweepOldExports(
   db: Db,
@@ -78,16 +80,25 @@ export async function sweepOldExports(
   let removed = 0
   for (const row of withFile) {
     if (!row.filePath) continue
+    let clearPath = false
     try {
       const info = await stat(row.filePath)
-      if (info.mtimeMs >= cutoff) continue
+      if (info.mtimeMs >= cutoff) continue // aún vigente: ni borrar ni limpiar
       await unlink(row.filePath)
       removed += 1
-    } catch {
-      // el archivo ya no existe: la fila no debe seguir ofreciendo una
-      // descarga rota, se limpia igual
+      clearPath = true
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        // el archivo ya no existe: la fila no debe seguir ofreciendo una
+        // descarga rota, se limpia igual
+        clearPath = true
+      } else {
+        continue // inaccesible, no inexistente: la fila queda intacta
+      }
     }
-    await db.update(taskRuns).set({ filePath: null, updatedAt: new Date() }).where(eq(taskRuns.id, row.id))
+    if (clearPath) {
+      await db.update(taskRuns).set({ filePath: null, updatedAt: new Date() }).where(eq(taskRuns.id, row.id))
+    }
   }
   return removed
 }

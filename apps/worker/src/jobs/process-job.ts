@@ -6,13 +6,14 @@ import { runTranscribe } from './transcribe.js'
 import { runContactsSync } from './contacts-sync.js'
 import { runSummarize, type SummarizeJobPayload } from './summarize.js'
 import { runContactsExport } from './contacts-export.js'
+import { runBirthdayImport, type GoogleJobConfig } from './birthday-import.js'
+import { runBirthdayCalendarSync } from './birthday-calendar-sync.js'
 
 /**
  * Dispatcher de jobs BullMQ del worker. Exportado y con dependencias por
  * parámetro (no lee `process.env` ni abre conexiones) para poder probarlo
- * sin arrancar el worker completo. birthday_* llega en la Fase 5; un nombre
- * desconocido hoy es un bug de encolado, no un fallo transitorio, así que
- * no vale la pena reintentarlo.
+ * sin arrancar el worker completo. Un nombre desconocido es un bug de
+ * encolado, no un fallo transitorio, así que no vale la pena reintentarlo.
  */
 
 export interface ProcessJobDeps {
@@ -22,6 +23,8 @@ export interface ProcessJobDeps {
   exportDir?: string
   /** Cliente LLM inyectable para tests; por defecto el que construye cada job. */
   llm?: LlmClient
+  /** Credenciales de Google; null si el worker no las tiene configuradas. */
+  google?: GoogleJobConfig | null
 }
 
 export async function processJob(job: Job, deps: ProcessJobDeps): Promise<unknown> {
@@ -45,6 +48,20 @@ export async function processJob(job: Job, deps: ProcessJobDeps): Promise<unknow
         includeSummaries?: boolean
       }
       return runContactsExport(userId, taskRunId, includeSummaries ?? false, deps)
+    }
+    case 'birthday_import': {
+      const { userId, taskRunId } = job.data as { userId: string; taskRunId?: string }
+      return runBirthdayImport(userId, taskRunId ?? null, {
+        db: deps.db,
+        google: deps.google ?? null,
+      })
+    }
+    case 'birthday_calendar_sync': {
+      const { userId, taskRunId } = job.data as { userId: string; taskRunId?: string }
+      return runBirthdayCalendarSync(userId, taskRunId ?? null, {
+        db: deps.db,
+        google: deps.google ?? null,
+      })
     }
     default:
       throw new UnrecoverableError(`job desconocido: ${job.name}`)

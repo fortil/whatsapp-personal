@@ -17,11 +17,31 @@ function fakeJob(name: string, data: unknown): Job {
 
 describe('processJob', () => {
   it('nombre de job desconocido: UnrecoverableError, no se reintenta', async () => {
-    // birthday_import es real en el plan pero llega en la Fase 5: hoy es
-    // tan desconocido para el dispatcher como cualquier typo
-    await expect(processJob(fakeJob('birthday_import', {}), { db, evolution: null })).rejects.toThrow(
+    await expect(processJob(fakeJob('birthday_nuevo', {}), { db, evolution: null })).rejects.toThrow(
       UnrecoverableError,
     )
+  })
+
+  it('birthday_import: delega en runBirthdayImport con el userId del payload', async () => {
+    // sin cuenta vinculada: runBirthdayImport lanza con mensaje claro, lo
+    // que basta para probar que processJob llegó a llamarlo con los deps
+    await expect(
+      processJob(fakeJob('birthday_import', { userId: '00000000-0000-0000-0000-000000000000' }), {
+        db,
+        evolution: null,
+        google: null,
+      }),
+    ).rejects.toThrow(/falta la configuración de Google/)
+  })
+
+  it('birthday_calendar_sync: delega en runBirthdayCalendarSync con el userId del payload', async () => {
+    await expect(
+      processJob(fakeJob('birthday_calendar_sync', { userId: '00000000-0000-0000-0000-000000000000' }), {
+        db,
+        evolution: null,
+        google: null,
+      }),
+    ).rejects.toThrow(/falta la configuración de Google/)
   })
 
   it('transcribe: delega en runTranscribe con el messageId del payload', async () => {

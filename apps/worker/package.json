@@ -26,6 +26,7 @@
   "dependencies": {
     "@wp/channels": "workspace:*",
     "@wp/db": "workspace:*",
+    "@wp/google": "workspace:*",
     "@wp/llm": "workspace:*",
     "@wp/shared": "workspace:*",
     "bullmq": "^6.1.2",

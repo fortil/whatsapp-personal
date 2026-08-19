@@ -27,6 +27,7 @@
     "@fastify/cookie": "^11.1.2",
     "@wp/channels": "workspace:*",
     "@wp/db": "workspace:*",
+    "@wp/google": "workspace:*",
     "@wp/llm": "workspace:*",
     "@wp/mailer": "workspace:*",
     "@wp/shared": "workspace:*",

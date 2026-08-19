@@ -131,6 +131,49 @@ describe('runContactsExport', () => {
     expect(task.processed).toBe(task.total)
   })
 
+  it('la columna Cumpleaños refleja lo importado de Google (sin año incluido) y lo manual tal cual', async () => {
+    exportDir = await mkdtemp(path.join(tmpdir(), 'wp-export-'))
+
+    await db.insert(contacts).values([
+      {
+        userId,
+        waJid: '573007770101@s.whatsapp.net',
+        displayName: 'Importado de Google',
+        phoneE164: '+573007770101',
+        birthMonth: 12,
+        birthDay: 24,
+        birthYear: null, // Google entrega muchos cumpleaños sin año
+        birthdaySource: 'google',
+      },
+      {
+        userId,
+        waJid: '573007770102@s.whatsapp.net',
+        displayName: 'Editado a Mano',
+        phoneE164: '+573007770102',
+        birthMonth: 7,
+        birthDay: 1,
+        birthYear: 1980,
+        birthdaySource: 'manual',
+      },
+    ])
+
+    const [taskRun] = await db.insert(taskRuns).values({ userId, kind: 'contacts_export', status: 'queued' }).returning()
+    const result = await runContactsExport(userId, taskRun!.id, false, { db, exportDir })
+
+    const workbook = new ExcelJS.Workbook()
+    await workbook.xlsx.readFile(result.filePath)
+    const sheet = workbook.getWorksheet('Contactos')!
+    const birthdayOf = (name: string): unknown => {
+      let found: unknown
+      sheet.eachRow((row) => {
+        if (row.getCell(1).value === name) found = row.getCell(3).value
+      })
+      return found
+    }
+    expect(birthdayOf('Importado de Google')).toBe('12-24')
+    expect(birthdayOf('Editado a Mano')).toBe('1980-07-01')
+  })
+
   it('includeSummaries=true: genera el resumen inline y actualiza processed en cada contacto', async () => {
     exportDir = await mkdtemp(path.join(tmpdir(), 'wp-export-'))
 

@@ -19,6 +19,9 @@ importers:
       '@wp/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@wp/google':
+        specifier: workspace:*
+        version: link:../../packages/google
       '@wp/llm':
         specifier: workspace:*
         version: link:../../packages/llm
@@ -87,6 +90,9 @@ importers:
       '@wp/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@wp/google':
+        specifier: workspace:*
+        version: link:../../packages/google
       '@wp/llm':
         specifier: workspace:*
         version: link:../../packages/llm
@@ -149,9 +155,15 @@ importers:
 
   packages/google:
     devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@22.20.1)(vite@8.2.1(@types/node@22.20.1)(esbuild@0.28.2)(tsx@4.23.12))
 
   packages/llm:
     dependencies:

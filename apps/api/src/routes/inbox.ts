@@ -130,7 +130,8 @@ export function registerInboxRoutes(app: FastifyInstance, deps: RouteDeps): void
               )
             : eq(conversations.userId, userId),
         )
-        .orderBy(desc(conversations.lastMessageAt), desc(conversations.id))
+        // nulls last: las conversaciones sin mensajes van al final, no al frente
+        .orderBy(sql`${conversations.lastMessageAt} desc nulls last`, desc(conversations.id))
         .limit(PAGE_SIZE + 1)
 
       const page = rows.slice(0, PAGE_SIZE)

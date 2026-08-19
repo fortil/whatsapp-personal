@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
-import { and, asc, eq, gt, ilike, isNull, or } from 'drizzle-orm'
+import { and, asc, eq, gt, ilike, isNull, or, sql } from 'drizzle-orm'
 import { contacts, conversations, type Db } from '@wp/db'
 import { requireApproved } from '../auth/middleware.js'
 import { hasActiveRun, startTaskRun } from '../services/tasks.js'
@@ -62,7 +62,9 @@ async function primaryConversationId(
       .select({ id: conversations.id })
       .from(conversations)
       .where(and(eq(conversations.userId, userId), eq(conversations.contactId, contact.id)))
-      .orderBy(asc(conversations.id))
+      // nulls last: last_message_at puede ser null (conversación sin mensajes)
+      // y en Postgres el desc plano pone los null primero
+      .orderBy(sql`${conversations.lastMessageAt} desc nulls last`)
       .limit(1)
   )[0]
   return any?.id ?? null
