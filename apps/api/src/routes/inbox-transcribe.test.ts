@@ -51,7 +51,13 @@ const fakeQueue: TaskProducer = {
   },
 }
 
+// La suite asume que hay un proveedor de ASR configurado. En esta máquina lo
+// da el .env (la Mac mini), pero en CI no existe: sin esto la ruta responde
+// 503 y caen cuatro tests que solo fallan fuera de aquí.
+const savedAsrBaseUrl = process.env.LOCAL_ASR_BASE_URL
+
 beforeAll(async () => {
+  process.env.LOCAL_ASR_BASE_URL = process.env.LOCAL_ASR_BASE_URL ?? 'http://asr.test:8081'
   db = getDb()
   getRedis()
   await purgeTestUsers(db)
@@ -118,6 +124,8 @@ afterAll(async () => {
   await app.close()
   await closeRedis()
   await closeClient()
+  if (savedAsrBaseUrl === undefined) delete process.env.LOCAL_ASR_BASE_URL
+  else process.env.LOCAL_ASR_BASE_URL = savedAsrBaseUrl
 })
 
 describe('POST /inbox/messages/:id/transcribe', () => {

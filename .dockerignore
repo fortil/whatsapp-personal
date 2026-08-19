@@ -1,0 +1,28 @@
+# Lo que el contexto de build no necesita (y no debe filtrar al daemon).
+# .env NUNCA entra a la imagen: los secretos llegan por compose en runtime.
+.git
+.github
+.claude
+.forja
+.mimosa
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+.env
+.env.local
+backups
+var
+docs
+*.log
+**/*.log
+*.tsbuildinfo
+**/*.tsbuildinfo
+BRIEF.md
+BRIEF.fase.md
+PLAN.md
+RUN_STATE.md
+README.md
+EXECUTION_REPORT.md

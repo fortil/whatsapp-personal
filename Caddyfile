@@ -1,0 +1,13 @@
+# Caddy: HTTPS automático contra Let's Encrypt para el panel y la api.
+# Nada más se publica: los demás servicios no tienen puertos en el host.
+# DOMAIN llega por env desde el compose de producción.
+
+panel.{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy panel:3000
+}
+
+api.{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy api:3001
+}

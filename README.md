@@ -63,8 +63,10 @@ WhatsApp real; con `EVOLUTION_API_URL`/`EVOLUTION_API_KEY` vacíos las rutas
 | `packages/mailer` | Correo transaccional. Drivers `console` y `resend`; plantillas email-safe. |
 | `packages/google` | OAuth, People API, Calendar API con fetch crudo. Refresh tokens cifrados en reposo. |
 | `packages/shared` | Validación y normalización de teléfonos CO (libphonenumber-js). |
-| `infra/` | `postgres-init.sql`: pgcrypto y base `evolution` para el contenedor. |
-| `docs/` | Guías de operación: `mac-mini-setup.md`, `proveedores.md`. |
+| `infra/` | `postgres-init.sql` (pgcrypto y base `evolution`) y `infra/deploy/`: scripts de despliegue, backup y restore drill. |
+| `docs/` | Guías de operación: `mac-mini-setup.md`, `proveedores.md`, `despliegue.md` (runbook de producción). |
+| `Dockerfile`, `apps/panel/Dockerfile` | Imagen única para api/worker (`ARG APP`) y panel Next.js standalone. |
+| `.github/workflows/` | `ci.yml` (build, typecheck, test, validación de compose, smoke de build) y `deploy.yml` (publica en ghcr.io y despliega por SSH en push a `main`). |
 
 ## Variables de entorno
 
@@ -113,3 +115,5 @@ meses, por eso viven escritos.
   y `pnpm db-migrate`; nunca `drizzle-kit push`.
 - El reaper del worker marca `error` las tareas colgadas, los audios
   `pending` de más de 10 minutos y borra exports con más de 30 días.
+- Despliegue, backups y restore drill: runbook completo en
+  `docs/despliegue.md`.
