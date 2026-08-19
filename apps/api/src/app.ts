@@ -13,7 +13,9 @@ import { createSmsService, type SmsOtpService } from './services/sms.js'
 import { registerAdminRoutes } from './routes/admin.js'
 import { registerAuthRoutes, type RouteDeps } from './routes/auth.js'
 import { registerChannelRoutes } from './routes/channel.js'
+import { registerContactRoutes } from './routes/contacts.js'
 import { registerInboxRoutes } from './routes/inbox.js'
+import { registerTaskRoutes } from './routes/tasks.js'
 import { registerWebhookRoutes } from './routes/webhooks.js'
 
 export interface BuildAppOptions {
@@ -92,8 +94,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   registerAdminRoutes(app, deps)
   registerChannelRoutes(app, deps)
   registerInboxRoutes(app, deps)
+  registerContactRoutes(app, deps)
+  registerTaskRoutes(app, deps)
   // público, sin JWT: la autenticidad la da el header x-webhook-secret
-  registerWebhookRoutes(app, { db, env })
+  registerWebhookRoutes(app, { db, env, taskQueue: opts.taskQueue })
 
   // errores como {error: mensaje}, sin stack al cliente
   app.setErrorHandler((err: FastifyError, _request, reply) => {

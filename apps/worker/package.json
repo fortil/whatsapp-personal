@@ -27,8 +27,10 @@
     "@wp/channels": "workspace:*",
     "@wp/db": "workspace:*",
     "@wp/llm": "workspace:*",
+    "@wp/shared": "workspace:*",
     "bullmq": "^6.1.2",
     "drizzle-orm": "^0.45.2",
+    "exceljs": "^4.4.0",
     "ioredis": "^5.11.1"
   }
 }

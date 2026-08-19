@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { Worker } from 'bullmq'
+import { Queue, Worker } from 'bullmq'
 import { Redis } from 'ioredis'
 import { closeClient, getDb, type Db } from '@wp/db'
 import { createEvolutionClient, type EvolutionClient } from '@wp/channels'
@@ -11,11 +11,11 @@ import { missingStartupEnv, readWorkerEnv } from './env.js'
 /**
  * Arranque del worker: consumidor BullMQ de la cola 'tasks' (el mismo nombre
  * que produce apps/api/src/queues.ts), health liveness para el compose, y el
- * reaper mínimo de esta fase. attempts/backoff los fija el productor al
- * encolar (JOB_DEFAULTS en la API); aquí solo se procesa y se marca error
- * cuando BullMQ agota los reintentos. La lógica de cada pieza (dispatcher,
- * handler de 'failed', reaper) vive en ./jobs/ para poder probarla sin abrir
- * Redis ni bindear el puerto de health: este archivo solo cablea.
+ * reaper periódico. attempts/backoff los fija el productor al encolar
+ * (JOB_DEFAULTS en la API); aquí solo se procesa y se marca error cuando
+ * BullMQ agota los reintentos. La lógica de cada pieza (dispatcher, handler
+ * de 'failed', reaper) vive en ./jobs/ para poder probarla sin abrir Redis
+ * ni bindear el puerto de health: este archivo solo cablea.
  */
 
 const QUEUE_NAME = 'tasks'
@@ -39,7 +39,9 @@ if (!evolution) {
 // BullMQ exige maxRetriesPerRequest: null en la conexión que usa
 const connection = new Redis(env.redisUrl, { maxRetriesPerRequest: null })
 
-const worker = new Worker(QUEUE_NAME, (job) => processJob(job, { db, evolution }), { connection })
+const worker = new Worker(QUEUE_NAME, (job) => processJob(job, { db, evolution, exportDir: env.exportDir }), {
+  connection,
+})
 
 worker.on('failed', (job, err) => {
   console.error(`[worker] job ${job?.name ?? '?'} (${job?.id ?? '?'}) falló:`, err.message)
@@ -52,13 +54,28 @@ worker.on('error', (err) => {
   console.error('[worker] error de conexión:', err.message)
 })
 
-// ---------- reaper mínimo de esta fase ----------
-// Los otros barridos (task_runs colgados, exports viejos de EXPORT_DIR) son
-// de la Fase 4; ./jobs/reaper.ts es el único punto donde se agregan cuando
-// lleguen. Aquí solo se agenda.
+// ---------- reaper ----------
+// Los barridos viven en ./jobs/reaper.ts; aquí solo se agendan. Para no
+// marcar "interrumpido" un task_run cuyo job sigue corriendo, el reaper
+// consulta el estado real en BullMQ con una instancia de Queue productor
+// sobre la misma conexión.
+
+const reaperQueue = new Queue(QUEUE_NAME, { connection })
+
+const isActiveJob = async (bullmqJobId: string): Promise<boolean> => {
+  try {
+    const job = await reaperQueue.getJob(bullmqJobId)
+    if (!job) return false
+    const state = await job.getState()
+    return state === 'active' || state === 'waiting' || state === 'delayed' || state === 'waiting-children'
+  } catch {
+    // sin respuesta de redis mejor no tocar la fila en este ciclo
+    return true
+  }
+}
 
 const reaperTimer = setInterval(() => {
-  void runReaperSweep(db).catch((err) =>
+  void runReaperSweep(db, { exportDir: env.exportDir, isActiveJob }).catch((err) =>
     console.error('[worker] reaper falló:', err instanceof Error ? err.message : err),
   )
 }, env.reaperIntervalMs)
@@ -84,6 +101,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`[${signal}] cerrando worker`)
   clearInterval(reaperTimer)
   await worker.close()
+  await reaperQueue.close().catch(() => {})
   await new Promise<void>((resolve) => healthServer.close(() => resolve()))
   await connection.quit().catch(() => connection.disconnect())
   await closeClient()

@@ -14,3 +14,26 @@ export function badgeClass(status: string): string {
   if (status === 'suspended') return 'badge-suspended'
   return 'badge-pending' // pending_verification y pending_approval
 }
+
+/** Etiquetas de task_runs, compartidas por /contactos y /tareas. */
+export const TASK_KIND_LABEL: Record<string, string> = {
+  contacts_sync: 'Sincronizar contactos',
+  summarize: 'Resumen de conversación',
+  contacts_export: 'Exportar a Excel',
+  birthday_import: 'Importar cumpleaños',
+  birthday_calendar_sync: 'Sincronizar calendario',
+}
+
+export const TASK_STATUS_LABEL: Record<string, string> = {
+  queued: 'en cola',
+  running: 'en curso',
+  done: 'lista',
+  error: 'con error',
+}
+
+export function taskStatusBadgeClass(status: string): string {
+  if (status === 'done') return 'badge-approved'
+  if (status === 'error') return 'badge-rejected'
+  if (status === 'running') return 'badge-pending'
+  return 'badge-suspended' // queued
+}

@@ -11,6 +11,8 @@ export interface WorkerEnv {
   workerPort: number
   /** Cada cuánto corre el barrido del reaper. */
   reaperIntervalMs: number
+  /** Dónde caen los xlsx exportados; el job guarda la ruta absoluta en task_runs. */
+  exportDir: string
 }
 
 export function readWorkerEnv(env: NodeJS.ProcessEnv = process.env): WorkerEnv {
@@ -21,6 +23,7 @@ export function readWorkerEnv(env: NodeJS.ProcessEnv = process.env): WorkerEnv {
     evolutionApiKey: env.EVOLUTION_API_KEY ?? '',
     workerPort: Number(env.WORKER_PORT ?? 3002),
     reaperIntervalMs: Number(env.REAPER_INTERVAL_MS ?? 60_000),
+    exportDir: env.EXPORT_DIR || './var/exports',
   }
 }
 

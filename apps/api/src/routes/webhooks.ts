@@ -4,6 +4,8 @@ import { eq } from 'drizzle-orm'
 import { type Db, waInstances, waStateEnum } from '@wp/db'
 import type { ApiEnv } from '../env.js'
 import { ingestMessage } from '../services/ingest.js'
+import { hasActiveRun, startTaskRun } from '../services/tasks.js'
+import type { TaskProducer } from '../queues.js'
 
 /**
  * Webhook público de Evolution. Siempre responde 200, incluso al ignorar el
@@ -26,7 +28,10 @@ function mapConnectionState(raw: unknown): (typeof waStateEnum)['enumValues'][nu
   return null
 }
 
-export function registerWebhookRoutes(app: FastifyInstance, deps: { db: Db; env: ApiEnv }): void {
+export function registerWebhookRoutes(
+  app: FastifyInstance,
+  deps: { db: Db; env: ApiEnv; taskQueue?: TaskProducer },
+): void {
   const { db, env } = deps
 
   app.post('/webhooks/evolution/:instance', async (request, reply) => {
@@ -54,10 +59,25 @@ export function registerWebhookRoutes(app: FastifyInstance, deps: { db: Db; env:
         (body.data as { state?: unknown } | undefined)?.state,
       )
       if (!state) return ignored('connection.update sin estado reconocible')
+      const wasConnected = row.state === 'connected'
       await db
         .update(waInstances)
         .set({ state, lastStateAt: new Date() })
         .where(eq(waInstances.id, row.id))
+
+      // primera transición a connected: dispara el sync inicial de contactos
+      if (state === 'connected' && !wasConnected) {
+        if (!(await hasActiveRun(db, row.userId, 'contacts_sync'))) {
+          const result = await startTaskRun(db, {
+            userId: row.userId,
+            kind: 'contacts_sync',
+            jobName: 'contacts_sync',
+            jobData: { userId: row.userId },
+            producer: deps.taskQueue,
+          })
+          if ('error' in result) console.error(`[webhook] ${instance}: no se pudo encolar contacts_sync inicial`)
+        }
+      }
       return reply.send({ ok: true })
     }
 

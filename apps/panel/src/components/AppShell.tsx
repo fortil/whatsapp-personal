@@ -12,8 +12,8 @@ const APP_LINKS = [
   { href: '/inicio', label: 'Inicio' },
   { href: '/whatsapp', label: 'WhatsApp' },
   { href: '/inbox', label: 'Inbox' },
-  { href: '/contactos', label: 'Contactos', disabled: true },
-  { href: '/tareas', label: 'Tareas', disabled: true },
+  { href: '/contactos', label: 'Contactos' },
+  { href: '/tareas', label: 'Tareas' },
   { href: '/google', label: 'Google', disabled: true },
   { href: '/cuenta', label: 'Cuenta' },
 ]

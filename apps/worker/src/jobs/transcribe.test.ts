@@ -63,6 +63,9 @@ function fakeEvolution(base64: string, mimetype: string | null): EvolutionClient
     async findChats() {
       return []
     },
+    async findMessages() {
+      return []
+    },
   }
 }
 

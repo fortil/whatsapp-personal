@@ -1,13 +1,17 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { mkdtemp, mkdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { eq, inArray } from 'drizzle-orm'
-import { closeClient, contacts, conversations, getDb, messages, users, type Db } from '@wp/db'
-import { sweepStuckTranscriptions } from './reaper.js'
+import { closeClient, contacts, conversations, getDb, messages, taskRuns, users, type Db } from '@wp/db'
+import { sweepOldExports, sweepStuckTaskRuns, sweepStuckTranscriptions } from './reaper.js'
 
 /**
- * sweepStuckTranscriptions contra el postgres real, mismo patrón que
- * transcribe.test.ts: nada de esto arranca el worker (Redis, BullMQ, health
- * server), así que "pending colgado → reaper lo marca error" queda
- * reproducible por el revisor y no solo prosa del reporte.
+ * sweepStuckTranscriptions/sweepStuckTaskRuns/sweepOldExports contra el
+ * postgres real, mismo patrón que transcribe.test.ts: nada de esto arranca
+ * el worker (Redis, BullMQ, health server), así que "task_run interrumpido
+ * barrido por el reaper" queda reproducible por el revisor y no solo prosa
+ * del reporte.
  */
 
 const RUN = `${Date.now().toString(36)}${process.pid.toString(36)}`
@@ -94,6 +98,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  await db.delete(taskRuns).where(inArray(taskRuns.userId, suiteUserIds)).catch(() => {})
   await db.delete(messages).where(inArray(messages.userId, suiteUserIds)).catch(() => {})
   await db.delete(conversations).where(inArray(conversations.userId, suiteUserIds)).catch(() => {})
   await db.delete(contacts).where(inArray(contacts.userId, suiteUserIds)).catch(() => {})
@@ -120,5 +125,111 @@ describe('sweepStuckTranscriptions', () => {
     expect(touched).toBeGreaterThanOrEqual(1)
     const row = (await db.select().from(messages).where(eq(messages.id, freshMsgId2)).limit(1))[0]!
     expect(row.transcriptStatus).toBe('error')
+  })
+})
+
+describe('sweepStuckTaskRuns', () => {
+  // orden importa: sweepStuckTaskRuns no filtra por fila, barre TODO
+  // task_runs 'running' estancado. La fila "activo, no se toca" de abajo
+  // queda 'running' a propósito después de su test (el reaper la resuelve en
+  // el próximo ciclo cuando el job real termine), así que corre última para
+  // no ensuciar el "touched" de los tests que van después.
+  it('running reciente (updated_at fresco): no cae aunque isActiveJob diga que no', async () => {
+    const [row] = await db
+      .insert(taskRuns)
+      .values({ userId, kind: 'contacts_export', status: 'running', bullmqJobId: 'job-fresh' })
+      .returning()
+    const touched = await sweepStuckTaskRuns(db, 15 * 60_000, async () => false)
+    expect(touched).toBe(0)
+    const after = (await db.select().from(taskRuns).where(eq(taskRuns.id, row!.id)).limit(1))[0]!
+    expect(after.status).toBe('running')
+  })
+
+  it('running estancado (updated_at viejo) sin job activo: interrumpido', async () => {
+    const [row] = await db
+      .insert(taskRuns)
+      .values({ userId, kind: 'contacts_sync', status: 'running', bullmqJobId: 'job-stuck' })
+      .returning()
+    await db
+      .update(taskRuns)
+      .set({ updatedAt: new Date(Date.now() - 16 * 60_000) })
+      .where(eq(taskRuns.id, row!.id))
+
+    const touched = await sweepStuckTaskRuns(db, 15 * 60_000, async () => false)
+    expect(touched).toBe(1)
+    const after = (await db.select().from(taskRuns).where(eq(taskRuns.id, row!.id)).limit(1))[0]!
+    expect(after.status).toBe('error')
+    expect(after.error).toBe('interrumpido')
+    expect(after.finishedAt).not.toBeNull()
+  })
+
+  it('running estancado pero con job activo en BullMQ: no se toca (última: deja una fila running a propósito)', async () => {
+    const [row] = await db
+      .insert(taskRuns)
+      .values({ userId, kind: 'summarize', status: 'running', bullmqJobId: 'job-alive' })
+      .returning()
+    await db
+      .update(taskRuns)
+      .set({ updatedAt: new Date(Date.now() - 20 * 60_000) })
+      .where(eq(taskRuns.id, row!.id))
+
+    const touched = await sweepStuckTaskRuns(db, 15 * 60_000, async (id) => id === 'job-alive')
+    expect(touched).toBe(0)
+    const after = (await db.select().from(taskRuns).where(eq(taskRuns.id, row!.id)).limit(1))[0]!
+    expect(after.status).toBe('running')
+  })
+})
+
+describe('sweepOldExports', () => {
+  let exportDir: string
+
+  afterEach(async () => {
+    if (exportDir) await rm(exportDir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('borra el archivo viejo y limpia file_path; deja intacto el reciente', async () => {
+    exportDir = await mkdtemp(path.join(tmpdir(), 'wp-export-'))
+    const userDir = path.join(exportDir, userId)
+    await mkdir(userDir, { recursive: true })
+
+    const oldFile = path.join(userDir, 'old.xlsx')
+    const freshFile = path.join(userDir, 'fresh.xlsx')
+    await writeFile(oldFile, 'contenido viejo')
+    await writeFile(freshFile, 'contenido reciente')
+    const oldTime = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000)
+    await utimes(oldFile, oldTime, oldTime)
+
+    const [oldRow] = await db
+      .insert(taskRuns)
+      .values({ userId, kind: 'contacts_export', status: 'done', filePath: oldFile })
+      .returning()
+    const [freshRow] = await db
+      .insert(taskRuns)
+      .values({ userId, kind: 'contacts_export', status: 'done', filePath: freshFile })
+      .returning()
+
+    const removed = await sweepOldExports(db, exportDir, 30 * 24 * 60 * 60 * 1000)
+    expect(removed).toBe(1)
+
+    await expect(stat(oldFile)).rejects.toThrow()
+    await expect(stat(freshFile)).resolves.toBeDefined()
+
+    const oldAfter = (await db.select().from(taskRuns).where(eq(taskRuns.id, oldRow!.id)).limit(1))[0]!
+    expect(oldAfter.filePath).toBeNull()
+    const freshAfter = (await db.select().from(taskRuns).where(eq(taskRuns.id, freshRow!.id)).limit(1))[0]!
+    expect(freshAfter.filePath).toBe(freshFile)
+  })
+
+  it('file_path que ya no existe en disco: se limpia igual (disco borrado a mano)', async () => {
+    exportDir = await mkdtemp(path.join(tmpdir(), 'wp-export-'))
+    const [row] = await db
+      .insert(taskRuns)
+      .values({ userId, kind: 'contacts_export', status: 'done', filePath: path.join(exportDir, userId, 'fantasma.xlsx') })
+      .returning()
+
+    const removed = await sweepOldExports(db, exportDir, 30 * 24 * 60 * 60 * 1000)
+    expect(removed).toBe(0)
+    const after = (await db.select().from(taskRuns).where(eq(taskRuns.id, row!.id)).limit(1))[0]!
+    expect(after.filePath).toBeNull()
   })
 })

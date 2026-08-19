@@ -572,6 +572,25 @@ tbody tr:last-child td {
   color: var(--accent-hover);
 }
 
+/* ---------- barra de progreso de /tareas ---------- */
+
+.progress {
+  width: 100%;
+  min-width: 120px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.progress-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
 .composer {
   display: flex;
   gap: 8px;

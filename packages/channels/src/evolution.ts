@@ -60,6 +60,16 @@ export interface EvolutionClient {
   /** Sincronización de contactos/chats; la usa la fase 4. */
   findContacts(instanceName: string): Promise<unknown>
   findChats(instanceName: string): Promise<unknown>
+  /**
+   * Historial de una conversación; arranque en frío del resumen. La
+   * paginación de este endpoint no está confirmada contra una instancia
+   * real (riesgo 5 del plan): el caller la usa defensivamente, tope de
+   * páginas y tolerante a fallo.
+   */
+  findMessages(
+    instanceName: string,
+    input: { remoteJid: string; page: number; count: number },
+  ): Promise<unknown>
 }
 
 export function createEvolutionClient(config: EvolutionConfig): EvolutionClient {
@@ -207,6 +217,14 @@ export function createEvolutionClient(config: EvolutionConfig): EvolutionClient 
 
     async findChats(instanceName) {
       return requestJson('POST', `/chat/findChats/${encodeURIComponent(instanceName)}`)
+    },
+
+    async findMessages(instanceName, { remoteJid, page, count }) {
+      return requestJson('POST', `/chat/findMessages/${encodeURIComponent(instanceName)}`, {
+        // la paginación de este endpoint no es consistente en la doc de
+        // Evolution v2 (riesgo 5 del plan): el caller la usa defensivamente
+        body: { key: { remoteJid }, page, count },
+      })
     },
   }
 }

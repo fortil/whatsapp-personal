@@ -126,6 +126,9 @@ export function fakeEvolution(): FakeEvolution {
     async findChats() {
       return []
     },
+    async findMessages() {
+      return []
+    },
   }
   return fake
 }
