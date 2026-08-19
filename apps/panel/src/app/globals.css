@@ -607,6 +607,23 @@ tbody tr:last-child td {
   margin-bottom: 0;
 }
 
+.transcript-block {
+  margin-top: 6px;
+}
+
+.transcript-text {
+  margin: 6px 0 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.transcript-error {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+
 /* ---------- lista de conversaciones ---------- */
 
 .inbox-list {

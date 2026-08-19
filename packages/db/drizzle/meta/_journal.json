@@ -8,6 +8,13 @@
       "when": 1787152154962,
       "tag": "0000_concerned_ultimates",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787161819999,
+      "tag": "0001_short_chronomancer",
+      "breakpoints": true
     }
   ]
 }

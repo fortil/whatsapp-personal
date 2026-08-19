@@ -29,6 +29,7 @@ import {
 import { requireApproved, requireAuth, type AuthUser } from '../auth/middleware.js'
 import { hashPassword, verifyPasswordOrDummy } from '../auth/password.js'
 import { checkRateLimit, clientIp } from '../ratelimit.js'
+import type { TaskProducer } from '../queues.js'
 import type { SmsOtpService } from '../services/sms.js'
 import { checkCode, generateCode, issueCode, sha256 } from '../services/verification.js'
 
@@ -40,6 +41,8 @@ export interface RouteDeps {
   env: ApiEnv
   /** Ausente cuando falta la config de Evolution: /channel/* responde 503. */
   evolution?: EvolutionClient
+  /** Productor de jobs BullMQ; inyectable para tests. Sin él se usa redis real. */
+  taskQueue?: TaskProducer
 }
 
 type UserRow = typeof users.$inferSelect

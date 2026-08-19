@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify'
-import { and, desc, eq, isNull, lt, or, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 import { contacts, conversations, messages, waInstances } from '@wp/db'
 import type { EvolutionClient } from '@wp/channels'
+import { getTranscriptionConfig } from '@wp/llm'
 import { requireApproved } from '../auth/middleware.js'
+import { enqueueTranscribe } from '../queues.js'
 import { unreadCountExpr } from '../services/ingest.js'
 import type { RouteDeps } from './auth.js'
 
@@ -30,6 +32,8 @@ interface MessageItem {
   body: string | null
   mediaMime: string | null
   sentAt: string
+  transcript: string | null
+  transcriptStatus: string
 }
 
 function str(value: unknown): string {
@@ -70,6 +74,8 @@ function messageItem(row: typeof messages.$inferSelect): MessageItem {
     body: row.body,
     mediaMime: row.mediaMime,
     sentAt: row.sentAt.toISOString(),
+    transcript: row.transcript,
+    transcriptStatus: row.transcriptStatus,
   }
 }
 
@@ -300,6 +306,62 @@ export function registerInboxRoutes(app: FastifyInstance, deps: RouteDeps): void
         )
         .returning({ id: messages.id })
       return reply.send({ ok: true, updated: updated.length })
+    })
+
+    // Transcripción bajo demanda: encola el job del worker. El audio se baja
+    // desde el worker (base64-in-JSON de Evolution), nunca desde la API.
+    inboxScope.post('/inbox/messages/:id/transcribe', async (request, reply) => {
+      const userId = request.user!.id
+      const { id } = request.params as { id: string }
+
+      const msg = (
+        await db
+          .select()
+          .from(messages)
+          .where(and(eq(messages.id, id), eq(messages.userId, userId)))
+          .limit(1)
+      )[0]
+      if (!msg) return reply.code(404).send({ error: 'mensaje no encontrado' })
+      if (msg.type !== 'audio') {
+        return reply.code(400).send({ error: 'solo se pueden transcribir mensajes de audio' })
+      }
+      // caché: ya transcrito se devuelve sin llamar a WhatsApp ni al ASR
+      if (msg.transcriptStatus === 'done') {
+        return reply.send({ ok: true, cached: true, transcript: msg.transcript, transcriptStatus: 'done' })
+      }
+      if (msg.transcriptStatus === 'pending') {
+        return reply.code(409).send({ error: 'ese audio ya se está transcribiendo' })
+      }
+
+      if (!getTranscriptionConfig()) {
+        return reply.code(503).send({
+          error: 'no hay proveedor de transcripción configurado (LOCAL_ASR_BASE_URL, DASHSCOPE_API_KEY u OPENAI_API_KEY)',
+        })
+      }
+
+      // se encola antes del claim: si el worker gana la carrera y marca done,
+      // el UPDATE condicional no pasa y la response cae en la caché
+      try {
+        await enqueueTranscribe(msg.id, deps.taskQueue)
+      } catch (err) {
+        console.error('[inbox] no se pudo encolar la transcripción:', err instanceof Error ? err.message : err)
+        return reply.code(503).send({ error: 'el worker no está disponible; inténtalo de nuevo' })
+      }
+
+      const claimed = (
+        await db
+          .update(messages)
+          .set({ transcriptStatus: 'pending', transcribeStartedAt: new Date() })
+          .where(and(eq(messages.id, msg.id), inArray(messages.transcriptStatus, ['none', 'error'])))
+          .returning({ id: messages.id })
+      )[0]
+      if (claimed) return reply.send({ ok: true, transcriptStatus: 'pending' })
+
+      const fresh = (await db.select().from(messages).where(eq(messages.id, msg.id)).limit(1))[0]
+      if (fresh?.transcriptStatus === 'done') {
+        return reply.send({ ok: true, cached: true, transcript: fresh.transcript, transcriptStatus: 'done' })
+      }
+      return reply.code(409).send({ error: 'ese audio ya se está transcribiendo' })
     })
   })
 }

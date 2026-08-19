@@ -1,6 +1,7 @@
 import { closeClient } from '@wp/db'
 import { readEnv, missingStartupSecrets } from './env.js'
 import { closeRedis } from './redis.js'
+import { closeTaskQueue } from './queues.js'
 import { buildApp } from './app.js'
 
 const env = readEnv()
@@ -25,6 +26,7 @@ try {
 async function shutdown(signal: string) {
   console.log(`[${signal}] cerrando API`)
   await app.close()
+  await closeTaskQueue()
   await closeRedis()
   await closeClient()
   process.exit(0)

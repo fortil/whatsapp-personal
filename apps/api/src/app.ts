@@ -7,6 +7,7 @@ import { createEvolutionClient } from '@wp/channels'
 import { createMailer, type Mailer } from '@wp/mailer'
 import type { Redis } from 'ioredis'
 import { readEnv, type ApiEnv } from './env.js'
+import type { TaskProducer } from './queues.js'
 import { getRedis } from './redis.js'
 import { createSmsService, type SmsOtpService } from './services/sms.js'
 import { registerAdminRoutes } from './routes/admin.js'
@@ -22,6 +23,8 @@ export interface BuildAppOptions {
   redis?: Redis
   /** Cliente de Evolution; inyectable para tests. Sin env no se crea y /channel/* responde 503. */
   evolution?: EvolutionClient
+  /** Productor de jobs; inyectable para tests. Sin él, la cola usa redis real. */
+  taskQueue?: TaskProducer
 }
 
 /**
@@ -50,7 +53,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       ? createEvolutionClient({ baseUrl: env.evolutionApiUrl, apiKey: env.evolutionApiKey })
       : undefined)
 
-  const deps: RouteDeps = { db, redis, mailer, sms, env, evolution }
+  const deps: RouteDeps = { db, redis, mailer, sms, env, evolution, taskQueue: opts.taskQueue }
   const app = Fastify({ trustProxy: true })
 
   await app.register(cookie)

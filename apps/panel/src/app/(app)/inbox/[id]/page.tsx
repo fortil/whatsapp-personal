@@ -4,12 +4,13 @@ import AutoRefresh from '@/components/AutoRefresh'
 import { apiFetch } from '@/lib/api'
 import { formatTime } from '@/lib/dates'
 import Composer from './Composer'
+import TranscribeButton from './TranscribeButton'
 import { refreshChatAction } from './actions'
 
 /**
  * Chat de una conversación. Marca leído al abrir (la llamada es idempotente)
  * y refresca cada 5 s por Server Action. Los medios se muestran como chip de
- * tipo; la reproducción llega con la transcripción (fase 3).
+ * tipo; los audios llevan además el botón de transcripción bajo demanda.
  */
 
 interface MessageItem {
@@ -19,6 +20,8 @@ interface MessageItem {
   body: string | null
   mediaMime: string | null
   sentAt: string
+  transcript: string | null
+  transcriptStatus: string
 }
 
 interface MessagesResponse {
@@ -80,6 +83,14 @@ export default async function ChatPage({
               ) : (
                 <span className="chip">{TYPE_LABEL[m.type] ?? 'Mensaje'}</span>
               )}
+              {m.type === 'audio' ? (
+                <TranscribeButton
+                  messageId={m.id}
+                  conversationId={id}
+                  status={m.transcriptStatus}
+                  transcript={m.transcript}
+                />
+              ) : null}
               <span className="msg-time">{formatTime(m.sentAt)}</span>
             </div>
           ))}

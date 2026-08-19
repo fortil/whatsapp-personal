@@ -190,6 +190,10 @@ export const messages = pgTable(
     transcript: text('transcript'),
     transcriptStatus: transcriptStatusEnum('transcript_status').notNull().default('none'),
     transcriptModel: text('transcript_model'),
+    // set al marcar pending; lo usa el reaper para detectar transcripciones
+    // colgadas (>10 min) sin depender de created_at, que es la llegada del
+    // audio y puede ser muy anterior a cuando se pidió transcribirlo
+    transcribeStartedAt: tstz('transcribe_started_at'),
     transcribedAt: tstz('transcribed_at'),
     sentAt: tstz('sent_at').notNull(), // timestamp del mensaje según WhatsApp
     createdAt: tstz('created_at').notNull().defaultNow(), // inserción: base del watermark

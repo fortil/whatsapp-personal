@@ -1,0 +1,1 @@
+ALTER TABLE "messages" ADD COLUMN "transcribe_started_at" timestamp with time zone;
