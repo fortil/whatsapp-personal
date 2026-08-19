@@ -27,3 +27,14 @@ export function formatDateTime(value: string | Date | null | undefined): string 
     hour12: true,
   }).format(new Date(value))
 }
+
+/** Hora corta para las burbujas del chat. */
+export function formatTime(value: string | Date | null | undefined): string {
+  if (!value) return ''
+  return new Intl.DateTimeFormat('es-CO', {
+    timeZone: BOGOTA,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(new Date(value))
+}

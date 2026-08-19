@@ -2,6 +2,8 @@ import Fastify, { type FastifyError, type FastifyInstance } from 'fastify'
 import cookie from '@fastify/cookie'
 import { sql } from 'drizzle-orm'
 import { closeClient, type Db, getDb } from '@wp/db'
+import type { EvolutionClient } from '@wp/channels'
+import { createEvolutionClient } from '@wp/channels'
 import { createMailer, type Mailer } from '@wp/mailer'
 import type { Redis } from 'ioredis'
 import { readEnv, type ApiEnv } from './env.js'
@@ -9,12 +11,17 @@ import { getRedis } from './redis.js'
 import { createSmsService, type SmsOtpService } from './services/sms.js'
 import { registerAdminRoutes } from './routes/admin.js'
 import { registerAuthRoutes, type RouteDeps } from './routes/auth.js'
+import { registerChannelRoutes } from './routes/channel.js'
+import { registerInboxRoutes } from './routes/inbox.js'
+import { registerWebhookRoutes } from './routes/webhooks.js'
 
 export interface BuildAppOptions {
   env?: ApiEnv
   mailer?: Mailer
   sms?: SmsOtpService
   redis?: Redis
+  /** Cliente de Evolution; inyectable para tests. Sin env no se crea y /channel/* responde 503. */
+  evolution?: EvolutionClient
 }
 
 /**
@@ -37,8 +44,13 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       authToken: env.twilioAuthToken,
       verifyServiceSid: env.twilioVerifyServiceSid,
     })
+  const evolution =
+    opts.evolution ??
+    (env.evolutionApiUrl && env.evolutionApiKey
+      ? createEvolutionClient({ baseUrl: env.evolutionApiUrl, apiKey: env.evolutionApiKey })
+      : undefined)
 
-  const deps: RouteDeps = { db, redis, mailer, sms, env }
+  const deps: RouteDeps = { db, redis, mailer, sms, env, evolution }
   const app = Fastify({ trustProxy: true })
 
   await app.register(cookie)
@@ -75,6 +87,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
   registerAuthRoutes(app, deps)
   registerAdminRoutes(app, deps)
+  registerChannelRoutes(app, deps)
+  registerInboxRoutes(app, deps)
+  // público, sin JWT: la autenticidad la da el header x-webhook-secret
+  registerWebhookRoutes(app, { db, env })
 
   // errores como {error: mensaje}, sin stack al cliente
   app.setErrorHandler((err: FastifyError, _request, reply) => {

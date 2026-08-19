@@ -12,6 +12,7 @@ import {
   type Mailer,
 } from '@wp/mailer'
 import { normalizeCoMobile } from '@wp/shared'
+import type { EvolutionClient } from '@wp/channels'
 import type { Redis } from 'ioredis'
 import type { ApiEnv } from '../env.js'
 import {
@@ -37,6 +38,8 @@ export interface RouteDeps {
   mailer: Mailer
   sms: SmsOtpService
   env: ApiEnv
+  /** Ausente cuando falta la config de Evolution: /channel/* responde 503. */
+  evolution?: EvolutionClient
 }
 
 type UserRow = typeof users.$inferSelect

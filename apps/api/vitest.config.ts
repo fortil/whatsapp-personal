@@ -14,5 +14,8 @@ export default defineConfig({
     include: ['src/**/*.test.ts'],
     hookTimeout: 30_000,
     testTimeout: 30_000,
+    // todas las suites comparten el postgres del compose: en paralelo, el
+    // afterAll de un archivo borra los usuarios del que sigue corriendo
+    fileParallelism: false,
   },
 })

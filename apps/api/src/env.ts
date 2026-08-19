@@ -20,6 +20,10 @@ export interface ApiEnv {
   twilioVerifyServiceSid: string
   adminEmail: string
   apiPort: number
+  evolutionApiUrl: string
+  evolutionApiKey: string
+  /** URL de esta API alcanzable desde el contenedor de Evolution (webhooks). */
+  publicApiUrl: string
 }
 
 export function readEnv(env: NodeJS.ProcessEnv = process.env): ApiEnv {
@@ -37,6 +41,9 @@ export function readEnv(env: NodeJS.ProcessEnv = process.env): ApiEnv {
     twilioVerifyServiceSid: env.TWILIO_VERIFY_SERVICE_SID ?? '',
     adminEmail: env.ADMIN_EMAIL ?? '',
     apiPort: Number(env.API_PORT ?? 3001),
+    evolutionApiUrl: env.EVOLUTION_API_URL ?? '',
+    evolutionApiKey: env.EVOLUTION_API_KEY ?? '',
+    publicApiUrl: env.PUBLIC_API_URL ?? '',
   }
 }
 

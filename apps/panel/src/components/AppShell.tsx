@@ -10,8 +10,8 @@ import ShellNav from './ShellNav'
 
 const APP_LINKS = [
   { href: '/inicio', label: 'Inicio' },
-  { href: '/whatsapp', label: 'WhatsApp', disabled: true },
-  { href: '/inbox', label: 'Inbox', disabled: true },
+  { href: '/whatsapp', label: 'WhatsApp' },
+  { href: '/inbox', label: 'Inbox' },
   { href: '/contactos', label: 'Contactos', disabled: true },
   { href: '/tareas', label: 'Tareas', disabled: true },
   { href: '/google', label: 'Google', disabled: true },
