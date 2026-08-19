@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm 10 bloquea los lifecycle scripts de dependencias salvo lista explícita;
+# esbuild (vitest/drizzle-kit) necesita permiso para instalar su binario.
+onlyBuiltDependencies:
+  - esbuild

@@ -1,0 +1,33 @@
+{
+  "name": "@wp/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "generate": "drizzle-kit generate",
+    "premigrate": "pnpm run build",
+    "migrate": "node --env-file-if-exists=../../.env dist/migrate.js",
+    "preseed": "pnpm run build",
+    "seed": "node --env-file-if-exists=../../.env dist/seed.js"
+  },
+  "dependencies": {
+    "@wp/shared": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^5.9.3"
+  }
+}

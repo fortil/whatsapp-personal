@@ -5,6 +5,8 @@ dist/
 .env.local
 var/
 *.log
+*.tsbuildinfo
 .DS_Store
 .forja/
 .mimosa/
+.claude/
