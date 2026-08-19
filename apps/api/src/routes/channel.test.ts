@@ -23,6 +23,7 @@ import {
   inject,
   mail,
   phone,
+  purgeTestUsers,
   sessionCookie,
   type FakeEvolution,
 } from '../test-support.js'
@@ -44,6 +45,7 @@ const suiteUsers: string[] = []
 beforeAll(async () => {
   db = getDb()
   getRedis()
+  await purgeTestUsers(db)
   evo = fakeEvolution()
   const env = {
     ...readEnv(),

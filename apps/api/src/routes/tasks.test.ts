@@ -8,7 +8,7 @@ import { closeClient, getDb, taskRuns, users, type Db } from '@wp/db'
 import { closeRedis, getRedis } from '../redis.js'
 import { buildApp } from '../app.js'
 import { readEnv } from '../env.js'
-import { RUN, createDirectUser, inject, mail, phone, sessionCookie } from '../test-support.js'
+import { RUN, createDirectUser, inject, mail, phone, purgeTestUsers, sessionCookie } from '../test-support.js'
 
 /**
  * task_runs: lista, detalle y descarga. El criterio de aceptación de esta
@@ -29,6 +29,7 @@ const suiteUsers: string[] = []
 beforeAll(async () => {
   db = getDb()
   getRedis()
+  await purgeTestUsers(db)
   const env = { ...readEnv(), jwtSecret: `test-tasks-${RUN}-secret` }
   app = await buildApp({ env })
 

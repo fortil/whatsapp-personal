@@ -23,6 +23,7 @@ import {
   inject,
   mail,
   phone,
+  purgeTestUsers,
   sessionCookie,
 } from '../test-support.js'
 
@@ -53,6 +54,7 @@ const fakeQueue: TaskProducer = {
 beforeAll(async () => {
   db = getDb()
   getRedis()
+  await purgeTestUsers(db)
   const env = {
     ...readEnv(),
     jwtSecret: `test-${RUN}-secret`,

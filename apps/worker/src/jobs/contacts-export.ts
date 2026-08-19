@@ -49,8 +49,9 @@ export async function conversationIdForContact(
       .from(conversations)
       .where(and(eq(conversations.userId, userId), eq(conversations.contactId, contact.id)))
       // nulls last: last_message_at puede ser null (conversación sin mensajes)
-      // y en Postgres el desc plano pone los null primero
-      .orderBy(sql`${conversations.lastMessageAt} desc nulls last`)
+      // y en Postgres el desc plano pone los null primero; desempate por id
+      // para que el orden sea estable entre contactos
+      .orderBy(sql`${conversations.lastMessageAt} desc nulls last, ${conversations.id} desc`)
       .limit(1)
   )[0]
   return any?.id ?? null

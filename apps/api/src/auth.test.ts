@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
-import { eq, inArray, like } from 'drizzle-orm'
+import { and, eq, inArray, like, notLike } from 'drizzle-orm'
 import { closeClient, getDb, trustedDevices, users, verificationCodes, type Db } from '@wp/db'
 import type { Mailer, MailMessage } from '@wp/mailer'
 import { closeRedis, getRedis } from './redis.js'
@@ -9,6 +9,7 @@ import { readEnv } from './env.js'
 import type { SmsOtpService } from './services/sms.js'
 import { checkCode, generateCode, issueCode, sha256 } from './services/verification.js'
 import { hashPassword } from './auth/password.js'
+import { purgeRateLimits, purgeTestUsers } from './test-support.js'
 
 /**
  * Suite de integración de la fase de auth. Corre contra el postgres y redis
@@ -53,10 +54,11 @@ function recordingSms(): SmsOtpService {
       const code = generateCode()
       smsCodes.push(code)
       await issueCode(db_, { userId: input.userId, channel: 'sms', purpose: input.purpose, code })
-      return true
+      return { ok: true }
     },
     async check(db_, input) {
-      return checkCode(db_, { ...input, channel: 'sms' })
+      const ok = await checkCode(db_, { ...input, channel: 'sms' })
+      return ok ? { ok: true } : { ok: false, error: 'código inválido o expirado' }
     },
   }
 }
@@ -153,7 +155,8 @@ async function createDirectUser(opts: {
 
 beforeAll(async () => {
   db = getDb()
-  getRedis()
+  await purgeTestUsers(db)
+  await purgeRateLimits(getRedis())
   sentMail = []
   smsCodes = []
   const env = { ...readEnv(), jwtSecret: `test-${RUN}-secret`, adminEmail: ADMIN_EMAIL }
@@ -161,11 +164,13 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  // correos de test propios y de runs abortados: dominio exclusivo de la suite
-  const testUsers = db.select({ id: users.id }).from(users).where(like(users.email, '%@mail.test'))
+  // correos de test propios y de runs abortados de la API; sin los "worker-"
+  // porque el worker corre sus suites en paralelo sobre la misma DB
+  const own = and(like(users.email, '%@mail.test'), notLike(users.email, 'worker-%'))
+  const testUsers = db.select({ id: users.id }).from(users).where(own)
   await db.delete(verificationCodes).where(inArray(verificationCodes.userId, testUsers)).catch(() => {})
   await db.delete(trustedDevices).where(inArray(trustedDevices.userId, testUsers)).catch(() => {})
-  await db.delete(users).where(like(users.email, '%@mail.test')).catch(() => {})
+  await db.delete(users).where(own).catch(() => {})
   await app.close()
   await closeRedis()
   await closeClient()
@@ -287,6 +292,92 @@ describe('anti-enumeración', () => {
   })
 })
 
+describe('anti-enumeración de verify/phone', () => {
+  /**
+   * SMS de twilio que falla siempre con el error específico del proveedor: si
+   * la ruta filtrara el detalle, este doble lo destapa.
+   */
+  function twilioErroringSms(): SmsOtpService {
+    return {
+      driver: 'twilio',
+      async start() {
+        return { ok: false }
+      },
+      async check() {
+        return { ok: false, error: 'no se pudo completar la verificación por SMS (HTTP 404); inténtalo de nuevo' }
+      },
+    }
+  }
+
+  async function probeApp() {
+    return buildApp({
+      env: { ...readEnv(), jwtSecret: `test-probe-${RUN}-secret`, adminEmail: ADMIN_EMAIL },
+      mailer: captureMailer(),
+      sms: twilioErroringSms(),
+    })
+  }
+
+  it('teléfono registrado sin verificación abierta responde el mismo cuerpo que uno inexistente', async () => {
+    const probe = await probeApp()
+    try {
+      const registrado = await createDirectUser({ email: mail('enum-sms'), phone: phone(18) })
+      const a = await probe.inject({
+        method: 'POST',
+        url: '/auth/verify/phone',
+        headers: { 'x-forwarded-for': '203.0.113.10', 'content-type': 'application/json' },
+        payload: JSON.stringify({ phone: registrado.phone, code: '123456' }),
+      })
+      const b = await probe.inject({
+        method: 'POST',
+        url: '/auth/verify/phone',
+        headers: { 'x-forwarded-for': '203.0.113.11', 'content-type': 'application/json' },
+        payload: JSON.stringify({ phone: phone(998), code: '123456' }),
+      })
+      expect(a.statusCode).toBe(b.statusCode)
+      expect(a.json()).toEqual(b.json())
+      expect(a.json()).toEqual({ error: 'código inválido o expirado' })
+    } finally {
+      await probe.close()
+    }
+  })
+
+  it('con una verificación signup_phone abierta el error específico sí se muestra', async () => {
+    const probe = await probeApp()
+    try {
+      const u = await createDirectUser({ email: mail('enum-sms-abierta'), phone: phone(19) })
+      await issueCode(db, { userId: u.id, channel: 'sms', purpose: 'signup_phone', code: null })
+      const res = await probe.inject({
+        method: 'POST',
+        url: '/auth/verify/phone',
+        headers: { 'x-forwarded-for': '203.0.113.12', 'content-type': 'application/json' },
+        payload: JSON.stringify({ phone: u.phone, code: '123456' }),
+      })
+      expect(res.statusCode).toBe(400)
+      expect(res.json()).toEqual({ error: 'no se pudo completar la verificación por SMS (HTTP 404); inténtalo de nuevo' })
+    } finally {
+      await probe.close()
+    }
+  })
+
+  it('rate limit: 5 por minuto por IP, el sexto recibe 429', async () => {
+    const tag = RUN.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) % 250, 0)
+    const ip = `198.51.100.${tag + 2}`
+    await getRedis().del(`rl:verify-phone-ip:${ip}`)
+    const states: number[] = []
+    for (let i = 0; i < 6; i++) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/auth/verify/phone',
+        headers: { 'x-forwarded-for': ip, 'content-type': 'application/json' },
+        payload: JSON.stringify({ phone: phone(61), code: '000000' }),
+      })
+      states.push(res.statusCode)
+    }
+    expect(states.slice(0, 5)).toEqual([400, 400, 400, 400, 400])
+    expect(states[5]).toBe(429)
+  })
+})
+
 describe('rate limit', () => {
   it('login: 5/min por IP, el sexto recibe 429', async () => {
     const uniqueIp = `192.0.2.${RUN.charCodeAt(3) % 250}`
@@ -301,6 +392,27 @@ describe('rate limit', () => {
       last = res.statusCode
     }
     expect(last).toBe(429)
+  })
+
+  it('signup: 5 al día por IP, el sexto recibe 429', async () => {
+    // IP única por run: el bucket diario vive 24h en redis y una IP repetida
+    // entre runs arrancaría ya agotada (198.51.100.x no lo usa nextIp)
+    const tag = RUN.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) % 250, 0)
+    const ip = `198.51.100.${tag + 1}`
+    // idempotencia contra un run anterior abortado sobre la misma IP
+    await getRedis().del(`rl:signup-ip-day:${ip}`, `rl:signup-ip:${ip}`)
+    const states: number[] = []
+    for (let i = 0; i < 6; i++) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/auth/signup',
+        headers: { 'x-forwarded-for': ip, 'content-type': 'application/json' },
+        payload: JSON.stringify({ phone: phone(50 + i), email: mail(`dia${i}`), password: PASSWORD }),
+      })
+      states.push(res.statusCode)
+    }
+    expect(states.slice(0, 5)).toEqual([200, 200, 200, 200, 200])
+    expect(states[5]).toBe(429)
   })
 
   it('reenvío: 3 por 5 minutos', async () => {

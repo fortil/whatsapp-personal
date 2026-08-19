@@ -6,7 +6,7 @@ import { closeRedis, getRedis } from '../redis.js'
 import { buildApp } from '../app.js'
 import { readEnv } from '../env.js'
 import type { TaskProducer } from '../queues.js'
-import { RUN, createDirectUser, inject, mail, phone, sessionCookie } from '../test-support.js'
+import { RUN, createDirectUser, inject, mail, phone, purgeTestUsers, sessionCookie } from '../test-support.js'
 
 /**
  * Contactos: listado/búsqueda solo de canónicos, edición de cumpleaños y
@@ -40,6 +40,7 @@ function fakeProducer(): TaskProducer & { calls: Array<{ name: string; data: unk
 beforeAll(async () => {
   db = getDb()
   getRedis()
+  await purgeTestUsers(db)
   const env = { ...readEnv(), jwtSecret: `test-contacts-${RUN}-secret` }
   app = await buildApp({ env, taskQueue: fakeProducer() })
 

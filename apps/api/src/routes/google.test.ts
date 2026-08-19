@@ -9,7 +9,7 @@ import { readEnv } from '../env.js'
 import { missingStartupSecrets } from '../env.js'
 import { signToken, verifyToken } from '../auth/jwt.js'
 import type { TaskProducer } from '../queues.js'
-import { RUN, createDirectUser, inject, mail, phone, sessionCookie } from '../test-support.js'
+import { RUN, createDirectUser, inject, mail, phone, purgeTestUsers, sessionCookie } from '../test-support.js'
 
 /**
  * Rutas /google/*: degradación 503 sin credenciales, compuerta de arranque de
@@ -74,6 +74,7 @@ const suiteUsers: string[] = []
 beforeAll(async () => {
   db = getDb()
   getRedis()
+  await purgeTestUsers(db)
 
   // app sin credenciales de Google: todo degrada
   const envPlain = { ...readEnv(), jwtSecret: JWT_SECRET }

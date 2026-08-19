@@ -61,7 +61,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: RouteDeps): void
         .set({ status: 'approved', approvedAt: new Date(), approvedBy: admin.id, rejectedReason: null })
         .where(eq(users.id, id))
         .returning()
-      const sent = await mailer.send({ to: updated!.email, ...accountApprovedEmail() })
+      const sent = await mailer.send({ to: updated!.email, ...accountApprovedEmail(env.panelUrl) })
       if (!sent) console.error(`[admin/approve] no se pudo avisar a ${updated!.email}`)
       return reply.send({ ok: true, user: publicRow(updated!) })
     })

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply } from 'fastify'
-import { and, eq, or } from 'drizzle-orm'
-import { type Db, trustedDevices, users } from '@wp/db'
+import { and, eq, gt, isNull, or } from 'drizzle-orm'
+import { type Db, trustedDevices, users, verificationCodes } from '@wp/db'
 import {
   emailChangeCodeEmail,
   loginCodeEmail,
@@ -88,6 +88,29 @@ function publicUser(user: UserRow | AuthUser) {
   return { id: user.id, email: user.email, phone: user.phone, role: user.role, status: user.status }
 }
 
+/**
+ * ¿Hay una verificación signup_phone en curso para este usuario? Solo con una
+ * fila sms vigente y sin consumir se muestra el error específico del proveedor:
+ * sin ella, un teléfono registrado y uno inexistente deben responder el mismo
+ * cuerpo o el detalle de Twilio se vuelve un oráculo de registro.
+ */
+async function hasOpenSignupPhoneVerification(db: Db, userId: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: verificationCodes.id })
+    .from(verificationCodes)
+    .where(
+      and(
+        eq(verificationCodes.userId, userId),
+        eq(verificationCodes.channel, 'sms'),
+        eq(verificationCodes.purpose, 'signup_phone'),
+        isNull(verificationCodes.consumedAt),
+        gt(verificationCodes.expiresAt, new Date()),
+      ),
+    )
+    .limit(1)
+  return rows.length > 0
+}
+
 export function registerAuthRoutes(app: FastifyInstance, deps: RouteDeps): void {
   const { db, redis, mailer, sms, env } = deps
   const requireSession = requireAuth({ db, jwtSecret: env.jwtSecret })
@@ -119,6 +142,10 @@ export function registerAuthRoutes(app: FastifyInstance, deps: RouteDeps): void 
     const ip = clientIp(request.headers['x-forwarded-for'] as string | undefined, request.socket.remoteAddress)
     if (!(await checkRateLimit(redis, 'signup-ip', ip, 10, 60_000))) {
       return reply.code(429).send({ error: 'demasiados registros, espera un minuto' })
+    }
+    // tope diario por IP (anti pumping): una IP no siembra 50 cuentas al día
+    if (!(await checkRateLimit(redis, 'signup-ip-day', ip, 5, 86_400_000))) {
+      return reply.code(429).send({ error: 'demasiados registros desde esta red hoy, inténtalo mañana' })
     }
 
     try {
@@ -193,7 +220,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: RouteDeps): void 
     // por teléfono al día (anti pumping): agotado, misma respuesta sin costo.
     if (await checkRateLimit(redis, 'sms-phone', user.phone, 3, 86_400_000)) {
       const started = await sms.start(db, { userId: user.id, phone: user.phone, purpose: 'signup_phone' })
-      if (!started) console.error(`[verify/email] no se pudo enviar el SMS a ${user.phone}`)
+      if (!started.ok) console.error(`[verify/email] no se pudo enviar el SMS a ${user.phone}`)
     }
     return reply.send({ ok: true, next: 'sms' })
   })
@@ -203,11 +230,22 @@ export function registerAuthRoutes(app: FastifyInstance, deps: RouteDeps): void 
     const phone = normalizeCoMobile(str(body?.phone))
     const code = str(body?.code)
     if (!phone) return reply.code(400).send({ error: 'celular inválido' })
+
+    const ip = clientIp(request.headers['x-forwarded-for'] as string | undefined, request.socket.remoteAddress)
+    if (!(await checkRateLimit(redis, 'verify-phone-ip', ip, 5, 60_000))) {
+      return reply.code(429).send({ error: 'demasiados intentos, espera un minuto' })
+    }
+
     const user = (await db.select().from(users).where(eq(users.phone, phone)).limit(1))[0]
     if (!user) return reply.code(400).send({ error: GENERIC_CODE_ERROR })
 
-    const ok = await sms.check(db, { userId: user.id, phone, purpose: 'signup_phone', code })
-    if (!ok) return reply.code(400).send({ error: GENERIC_CODE_ERROR })
+    const checked = await sms.check(db, { userId: user.id, phone, purpose: 'signup_phone', code })
+    if (!checked.ok) {
+      // el detalle del proveedor solo con una verificación en curso: sin ella,
+      // registrado y no registrado responden exactamente igual
+      const open = await hasOpenSignupPhoneVerification(db, user.id)
+      return reply.code(400).send({ error: open ? (checked.error ?? GENERIC_CODE_ERROR) : GENERIC_CODE_ERROR })
+    }
 
     let status = user.status
     if (user.status === 'pending_verification') {
@@ -247,7 +285,13 @@ export function registerAuthRoutes(app: FastifyInstance, deps: RouteDeps): void 
       if (!(await checkRateLimit(redis, 'sms-phone', user.phone, 3, 86_400_000))) {
         return reply.code(429).send({ error: 'demasiados SMS a este número hoy, intenta mañana' })
       }
-      await sms.start(db, { userId: user.id, phone: user.phone, purpose: 'signup_phone' })
+      const started = await sms.start(db, { userId: user.id, phone: user.phone, purpose: 'signup_phone' })
+      if (!started.ok) {
+        // mismo criterio que verify/phone: el detalle de Twilio solo si ya había
+        // una verificación en curso (un envío anterior que sí salió)
+        const open = await hasOpenSignupPhoneVerification(db, user.id)
+        return reply.code(503).send({ error: open ? (started.error ?? 'no se pudo enviar el SMS') : 'no se pudo enviar el SMS' })
+      }
     }
     return reply.send({ ok: true })
   })
@@ -352,7 +396,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: RouteDeps): void 
       return reply.code(429).send({ error: 'demasiados códigos SMS, intenta más tarde' })
     }
     const started = await sms.start(db, { userId: user.id, phone: user.phone, purpose: 'login' })
-    if (!started) return reply.code(503).send({ error: 'no se pudo enviar el SMS' })
+    if (!started.ok) return reply.code(503).send({ error: started.error ?? 'no se pudo enviar el SMS' })
     return reply.send({ ok: true, otp: 'sms' })
   })
 

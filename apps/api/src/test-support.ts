@@ -1,5 +1,19 @@
 import type { FastifyInstance } from 'fastify'
-import { users, type Db } from '@wp/db'
+import type { Redis } from 'ioredis'
+import { and, inArray, like, notLike } from 'drizzle-orm'
+import {
+  birthdayEvents,
+  contacts,
+  conversations,
+  googleAccounts,
+  messages,
+  taskRuns,
+  trustedDevices,
+  users,
+  verificationCodes,
+  waInstances,
+  type Db,
+} from '@wp/db'
 import type { EvolutionClient, QrResult, WaConnectionState } from '@wp/channels'
 import { SESSION_COOKIE, SESSION_TTL_SECONDS, signToken } from './auth/jwt.js'
 import { hashPassword } from './auth/password.js'
@@ -16,6 +30,48 @@ export const mail = (n: string) => `${n}.${RUN}@mail.test`
 const runTag = String(RUN.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) % 1000, 0)).padStart(3, '0')
 export const phone = (n: number) => `+573002${runTag}${String(n).padStart(3, '0')}`
 export const PASSWORD = 'clave-de-prueba-10'
+
+/**
+ * Borra a los usuarios de test de la API con sus dependencias. El afterAll de
+ * cada suite no alcanza: un run abortado a mitad deja filas huérfanas y el tag
+ * de 3 dígitos del celular choca contra ellas por el unique de phone, con
+ * fallo aleatorio. Esta purge en el beforeAll hace la limpieza determinista.
+ *
+ * El corte es @mail.test sin los correos que empiezan por "worker-": la API y
+ * el worker corren sus suites en paralelo contra la misma DB y comparten el
+ * dominio; sin el corte, esta purge borraría en vivo a los usuarios del worker
+ * (violación de FK al vuelo). Las suites de la API son secuenciales entre sí,
+ * así que entre archivos propios no hay carrera.
+ */
+const apiTestUserFilter = and(like(users.email, '%@mail.test'), notLike(users.email, 'worker-%'))
+
+export async function purgeTestUsers(db: Db): Promise<void> {
+  const testUsers = db.select({ id: users.id }).from(users).where(apiTestUserFilter)
+  await db.delete(messages).where(inArray(messages.userId, testUsers))
+  await db.delete(birthdayEvents).where(inArray(birthdayEvents.userId, testUsers))
+  await db.delete(conversations).where(inArray(conversations.userId, testUsers))
+  await db.delete(contacts).where(inArray(contacts.userId, testUsers))
+  await db.delete(taskRuns).where(inArray(taskRuns.userId, testUsers))
+  await db.delete(waInstances).where(inArray(waInstances.userId, testUsers))
+  await db.delete(googleAccounts).where(inArray(googleAccounts.userId, testUsers))
+  await db.delete(verificationCodes).where(inArray(verificationCodes.userId, testUsers))
+  await db.delete(trustedDevices).where(inArray(trustedDevices.userId, testUsers))
+  await db.delete(users).where(apiTestUserFilter)
+}
+
+/**
+ * Borra los buckets de rate limit de redis. Los tests rotan IPs desde cero en
+ * cada run (10.40.x.x, 10.50.x.x), así que un run anterior deja gastado el
+ * bucket diario de signups (TTL de 24h) y el primer signup del run llega 429.
+ */
+export async function purgeRateLimits(redis: Redis): Promise<void> {
+  let cursor = '0'
+  do {
+    const [next, keys] = await redis.scan(cursor, 'MATCH', 'rl:*', 'COUNT', 500)
+    cursor = next
+    if (keys.length > 0) await redis.del(...keys)
+  } while (cursor !== '0')
+}
 
 export async function createDirectUser(
   db: Db,
