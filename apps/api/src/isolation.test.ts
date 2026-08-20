@@ -206,11 +206,11 @@ describe('inbox: B no ve ni toca la conversación de A', () => {
   it('GET /inbox/conversations: A ve la suya, B no', async () => {
     const mine = await inject(app, 'GET', '/inbox/conversations', { cookie: cookieA })
     expect(mine.status).toBe(200)
-    expect(mine.body.items.some((c: { id: string }) => c.id === convA)).toBe(true)
+    expect((mine.body.items as Array<{ id: string }>).some((c) => c.id === convA)).toBe(true)
 
     const theirs = await inject(app, 'GET', '/inbox/conversations', { cookie: cookieB })
     expect(theirs.status).toBe(200)
-    expect(theirs.body.items.some((c: { id: string }) => c.id === convA)).toBe(false)
+    expect((theirs.body.items as Array<{ id: string }>).some((c) => c.id === convA)).toBe(false)
   })
 
   it('GET mensajes de la conversación de A con sesión de B: 404', async () => {
@@ -262,10 +262,10 @@ describe('inbox: B no ve ni toca la conversación de A', () => {
 describe('contactos: B no ve ni edita los de A', () => {
   it('GET /contacts: B no recibe el contacto de A', async () => {
     const mine = await inject(app, 'GET', '/contacts', { cookie: cookieA })
-    expect(mine.body.items.some((c: { id: string }) => c.id === contactA)).toBe(true)
+    expect((mine.body.items as Array<{ id: string }>).some((c) => c.id === contactA)).toBe(true)
     const theirs = await inject(app, 'GET', '/contacts', { cookie: cookieB })
     expect(theirs.status).toBe(200)
-    expect(theirs.body.items.some((c: { id: string }) => c.id === contactA)).toBe(false)
+    expect((theirs.body.items as Array<{ id: string }>).some((c) => c.id === contactA)).toBe(false)
   })
 
   it('PATCH del contacto de A con sesión de B: 404 y el nombre no cambia', async () => {
@@ -289,10 +289,10 @@ describe('contactos: B no ve ni edita los de A', () => {
 describe('tareas: B no lista, ve ni descarga las de A', () => {
   it('GET /tasks: la tarea de A no aparece para B', async () => {
     const mine = await inject(app, 'GET', '/tasks', { cookie: cookieA })
-    expect(mine.body.items.some((t: { id: string }) => t.id === exportTaskA)).toBe(true)
+    expect((mine.body.items as Array<{ id: string }>).some((t) => t.id === exportTaskA)).toBe(true)
     const theirs = await inject(app, 'GET', '/tasks', { cookie: cookieB })
     expect(theirs.status).toBe(200)
-    expect(theirs.body.items.some((t: { id: string }) => t.id === exportTaskA)).toBe(false)
+    expect((theirs.body.items as Array<{ id: string }>).some((t) => t.id === exportTaskA)).toBe(false)
   })
 
   it('GET /tasks/:id de A con sesión de B: 404', async () => {
@@ -348,7 +348,7 @@ describe('google: la vinculación vive por usuario', () => {
   it('connect de B firma el state con el userId de B', async () => {
     const res = await inject(app, 'GET', '/google/connect', { cookie: cookieB })
     expect(res.status).toBe(200)
-    const state = new URL(res.body.url).searchParams.get('state')!
+    const state = new URL(res.body.url as string).searchParams.get('state')!
     const payload = await verifyToken(JWT_SECRET, state)
     expect(payload?.sub).toBe(userIdB)
   })

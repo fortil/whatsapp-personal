@@ -107,21 +107,25 @@ afterAll(async () => {
 })
 
 describe('sweepStuckTranscriptions', () => {
+  // el barrido se acota a la conversación de esta suite: el UPDATE de
+  // producción barre la tabla entera y sin el acote este test podría marcar
+  // como error mensajes pending de otra suite corriendo a la vez (hoy
+  // secuencial, pero el acote lo vuelve inocuo ante cualquier cambio)
   it('pending colgado hace 11 minutos (umbral 10 min): queda en error', async () => {
-    const touched = await sweepStuckTranscriptions(db, 10 * 60_000)
+    const touched = await sweepStuckTranscriptions(db, 10 * 60_000, conversationId)
     expect(touched).toBeGreaterThanOrEqual(1)
     const row = (await db.select().from(messages).where(eq(messages.id, staleMsgId)).limit(1))[0]!
     expect(row.transcriptStatus).toBe('error')
   })
 
   it('pending reciente hace 1 minuto (umbral 10 min): sigue en pending', async () => {
-    await sweepStuckTranscriptions(db, 10 * 60_000)
+    await sweepStuckTranscriptions(db, 10 * 60_000, conversationId)
     const row = (await db.select().from(messages).where(eq(messages.id, freshMsgId)).limit(1))[0]!
     expect(row.transcriptStatus).toBe('pending')
   })
 
-  it('umbral explícito de 30s: un mensaje de hace 1 minuto también cae (fila propia, sin depender de las anteriores)', async () => {
-    const touched = await sweepStuckTranscriptions(db, 30_000)
+  it('umbral explícito de 30s: un mensaje de hace 1 minuto también cae', async () => {
+    const touched = await sweepStuckTranscriptions(db, 30_000, conversationId)
     expect(touched).toBeGreaterThanOrEqual(1)
     const row = (await db.select().from(messages).where(eq(messages.id, freshMsgId2)).limit(1))[0]!
     expect(row.transcriptStatus).toBe('error')
@@ -129,17 +133,19 @@ describe('sweepStuckTranscriptions', () => {
 })
 
 describe('sweepStuckTaskRuns', () => {
-  // orden importa: sweepStuckTaskRuns no filtra por fila, barre TODO
-  // task_runs 'running' estancado. La fila "activo, no se toca" de abajo
-  // queda 'running' a propósito después de su test (el reaper la resuelve en
-  // el próximo ciclo cuando el job real termine), así que corre última para
-  // no ensuciar el "touched" de los tests que van después.
+  // el barrido se acota al usuario de esta suite, igual que el de
+  // transcripciones: el SELECT de producción barre toda la tabla de
+  // task_runs y sin el acote este test podría tocar filas 'running' de otra
+  // suite corriendo a la vez. Dentro del archivo el orden sigue importando:
+  // la fila "activo, no se toca" del último test queda 'running' a propósito
+  // (el reaper la resuelve cuando el job real termine) y ensuciaría el
+  // "touched" de un test que corriera después.
   it('running reciente (updated_at fresco): no cae aunque isActiveJob diga que no', async () => {
     const [row] = await db
       .insert(taskRuns)
       .values({ userId, kind: 'contacts_export', status: 'running', bullmqJobId: 'job-fresh' })
       .returning()
-    const touched = await sweepStuckTaskRuns(db, 15 * 60_000, async () => false)
+    const touched = await sweepStuckTaskRuns(db, 15 * 60_000, async () => false, userId)
     expect(touched).toBe(0)
     const after = (await db.select().from(taskRuns).where(eq(taskRuns.id, row!.id)).limit(1))[0]!
     expect(after.status).toBe('running')
@@ -155,7 +161,7 @@ describe('sweepStuckTaskRuns', () => {
       .set({ updatedAt: new Date(Date.now() - 16 * 60_000) })
       .where(eq(taskRuns.id, row!.id))
 
-    const touched = await sweepStuckTaskRuns(db, 15 * 60_000, async () => false)
+    const touched = await sweepStuckTaskRuns(db, 15 * 60_000, async () => false, userId)
     expect(touched).toBe(1)
     const after = (await db.select().from(taskRuns).where(eq(taskRuns.id, row!.id)).limit(1))[0]!
     expect(after.status).toBe('error')
@@ -163,7 +169,7 @@ describe('sweepStuckTaskRuns', () => {
     expect(after.finishedAt).not.toBeNull()
   })
 
-  it('running estancado pero con job activo en BullMQ: no se toca (última: deja una fila running a propósito)', async () => {
+  it('running estancado pero con job activo en BullMQ: no se toca (deja una fila running a propósito)', async () => {
     const [row] = await db
       .insert(taskRuns)
       .values({ userId, kind: 'summarize', status: 'running', bullmqJobId: 'job-alive' })
@@ -173,7 +179,7 @@ describe('sweepStuckTaskRuns', () => {
       .set({ updatedAt: new Date(Date.now() - 20 * 60_000) })
       .where(eq(taskRuns.id, row!.id))
 
-    const touched = await sweepStuckTaskRuns(db, 15 * 60_000, async (id) => id === 'job-alive')
+    const touched = await sweepStuckTaskRuns(db, 15 * 60_000, async (id) => id === 'job-alive', userId)
     expect(touched).toBe(0)
     const after = (await db.select().from(taskRuns).where(eq(taskRuns.id, row!.id)).limit(1))[0]!
     expect(after.status).toBe('running')

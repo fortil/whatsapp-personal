@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeTranscribeState } from './transcribe-state'
+import { mergeTranscribeState, transcribeView } from './transcribe-state'
 
 /**
  * Reproduce el hallazgo M1 de la revisión: `useActionState` deja el estado
@@ -40,5 +40,34 @@ describe('mergeTranscribeState', () => {
     // (p.ej. reintento fallido desde otra pestaña)
     const local = { status: 'done', transcript: 'texto viejo' }
     expect(mergeTranscribeState('error', null, local)).toEqual({ status: 'error', transcript: null })
+  })
+})
+
+describe('transcribeView', () => {
+  // el componente calcula view sobre el estado ya combinado: misma composición aquí
+  const view = (status: string, transcript: string | null) => {
+    const merged = mergeTranscribeState(status, transcript, {})
+    return transcribeView(merged.status, merged.transcript)
+  }
+
+  it('done con transcripción: la transcripción inline', () => {
+    expect(view('done', 'hola, este es el audio')).toBe('transcript')
+  })
+
+  it('done con transcripción vacía: aviso de sin voz, no el botón de vuelta', () => {
+    // el caso de un audio sin habla: el worker guarda el text.trim() del ASR
+    // (cadena vacía) con transcript_status='done'. Volver al botón parece que
+    // el click no hizo nada.
+    expect(view('done', '')).toBe('no-voice')
+    expect(view('done', null)).toBe('no-voice')
+  })
+
+  it('pending: el chip transcribiendo', () => {
+    expect(view('pending', null)).toBe('pending')
+  })
+
+  it('none y error: el botón (error lo pinta como reintentar)', () => {
+    expect(view('none', null)).toBe('button')
+    expect(view('error', null)).toBe('button')
   })
 })

@@ -160,7 +160,10 @@ cambiar de modelo después es cambiar esa variable, no tocar código.
 
 ```
 LOCAL_LLM_BASE_URL=http://<ip-mini>:11434/v1
-LOCAL_LLM_MODEL=qwen3:8b
+# con el Modelfile del punto 3 el modelo se llama qwen3-16k; qwen3:8b solo si
+# fijaste el contexto global con launchctl. Dejar qwen3:8b habiendo seguido la
+# rama del Modelfile te deja el contexto por defecto y la truncación silenciosa
+LOCAL_LLM_MODEL=qwen3-16k
 LOCAL_ASR_BASE_URL=http://<ip-mini>:8081
 LOCAL_ASR_MODEL=large-v3-turbo
 ```

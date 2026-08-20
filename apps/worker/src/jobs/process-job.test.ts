@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { UnrecoverableError, type Job } from 'bullmq'
-import { getDb, type Db } from '@wp/db'
+import { closeClient, getDb, type Db } from '@wp/db'
 import { processJob } from './process-job.js'
 
 /**
@@ -10,6 +10,12 @@ import { processJob } from './process-job.js'
  */
 
 const db: Db = getDb()
+
+afterAll(async () => {
+  // como el resto de los ficheros de la suite: sin esto el pool queda abierto
+  // y el fin del test depende de que vitest mate el proceso
+  await closeClient()
+})
 
 function fakeJob(name: string, data: unknown): Job {
   return { name, data } as unknown as Job

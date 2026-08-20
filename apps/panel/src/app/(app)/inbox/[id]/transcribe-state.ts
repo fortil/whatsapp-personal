@@ -35,3 +35,18 @@ export function mergeTranscribeState(
   }
   return { status: serverStatus, transcript: serverTranscript }
 }
+
+export type TranscribeView = 'transcript' | 'no-voice' | 'pending' | 'button'
+
+/**
+ * Qué dibuja el chip del audio a partir del estado ya combinado. El caso que
+ * importaba es `done` con transcripción vacía: el ASR devuelve `text.trim()`
+ * y un audio sin habla queda en done sin texto, así que caer al botón ahí
+ * parece que el click no hizo nada (la action responde `cached: true` y la
+ * pantalla no cambia). Un done sin voz se dice y no se vuelve a ofrecer.
+ */
+export function transcribeView(status: string, transcript: string | null): TranscribeView {
+  if (status === 'done') return transcript ? 'transcript' : 'no-voice'
+  if (status === 'pending') return 'pending'
+  return 'button'
+}

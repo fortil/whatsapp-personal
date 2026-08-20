@@ -176,13 +176,26 @@ describe('ingest: fixtures de messages.upsert', () => {
   })
 
   it('retry duplicado del mismo webhook: ni fila nueva ni no-leído extra', async () => {
-    const res = await deliver(upsertEvent(instance, textIn))
+    // payload propio entregado dos veces desde cero: no asume que otro test
+    // ya haya insertado FIX-TEXT-1
+    const retryText = {
+      ...textIn,
+      key: { ...textIn.key, id: 'FIX-RETRY-1' },
+    }
+    const first = await deliver(upsertEvent(instance, retryText))
+    expect(first.body).toEqual({ ok: true, inserted: true })
+    const unreadAfterFirst = (await inboxList(mainCookie)).items.find(
+      (i) => i.waJid === '573001112233@s.whatsapp.net',
+    )!.unread
+
+    const res = await deliver(upsertEvent(instance, retryText))
     expect(res.status).toBe(200)
     expect(res.body).toEqual({ ok: true, inserted: false })
 
-    expect((await messagesBy(mainUser.id, 'FIX-TEXT-1')).length).toBe(1)
+    expect((await messagesBy(mainUser.id, 'FIX-RETRY-1')).length).toBe(1)
     const list = await inboxList(mainCookie)
-    expect(list.items[0]!.unread).toBe(1)
+    const unreadAfterRetry = list.items.find((i) => i.waJid === '573001112233@s.whatsapp.net')!.unread
+    expect(unreadAfterRetry).toBe(unreadAfterFirst)
   })
 
   it('audio entrante queda como type audio con su mimetype', async () => {
@@ -195,18 +208,31 @@ describe('ingest: fixtures de messages.upsert', () => {
   })
 
   it('fromMe se persiste como out en la misma conversación y no suma no-leído', async () => {
+    const mariaItem = async () =>
+      (await inboxList(mainCookie)).items.find((i) => i.waJid === '573001112233@s.whatsapp.net')!
+    // asegura la conversación de María también corriendo el test solo (si ya
+    // existe por el fixture anterior, este deliver es insert:false y no pisa nada)
+    await deliver(upsertEvent(instance, textIn))
+    const unreadBefore = (await mariaItem()).unread
+
     const res = await deliver(upsertEvent(instance, fromMeText))
     expect(res.body).toEqual({ ok: true, inserted: true })
     const [msg] = await messagesBy(mainUser.id, 'FIX-OUT-1')
     expect(msg!.direction).toBe('out')
     expect(msg!.body).toBe('claro, te la envío en un rato')
 
-    const convs = await db.select().from(conversations).where(eq(conversations.userId, mainUser.id))
+    // la misma conversación de María, no una nueva (y es la única para ese jid
+    // aunque los fixtures de LID hayan creado las suyas)
+    const convs = await db
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.userId, mainUser.id), eq(conversations.waJid, '573001112233@s.whatsapp.net')))
     expect(convs.length).toBe(1)
+    expect(convs[0]!.id).toBeDefined()
     const list = await inboxList(mainCookie)
-    expect(list.items.length).toBe(1)
-    // dos entrantes sin leer: el texto y el audio; el out no cuenta
-    expect(list.items[0]!.unread).toBe(2)
+    expect(list.items.filter((i) => i.waJid === '573001112233@s.whatsapp.net').length).toBe(1)
+    // el out no cuenta como no-leído: queda como estaba antes del envío
+    expect((await mariaItem()).unread).toBe(unreadBefore)
   })
 
   it('grupo, edición y reacción se ignoran con 200 y no escriben nada', async () => {
@@ -286,8 +312,18 @@ describe('ingest: fixtures de messages.upsert', () => {
   })
 
   it('marcar leído lleva el no-leído a 0 y es idempotente', async () => {
+    // mensaje entrante propio de este test: el no-leído inicial no depende
+    // de qué fixtures hayan corrido antes
+    const readText = {
+      ...textIn,
+      key: { ...textIn.key, remoteJid: '573007778001@s.whatsapp.net', id: 'FIX-READ-1' },
+      pushName: 'Lectura',
+    }
+    await deliver(upsertEvent(instance, readText))
     const list = await inboxList(mainCookie)
-    const conv = list.items.find((i) => i.unread > 0)!
+    const conv = list.items.find((i) => i.waJid === '573007778001@s.whatsapp.net')!
+    expect(conv.unread).toBe(1)
+
     const first = await inject(app, 'POST', `/inbox/conversations/${conv.id}/read`, { cookie: mainCookie })
     expect(first.status).toBe(200)
     expect(first.body.updated).toBeGreaterThanOrEqual(1)
@@ -302,25 +338,33 @@ describe('ingest: fixtures de messages.upsert', () => {
 
 describe('inbox: respuesta y carrera webhook', () => {
   it('responder inserta el out y el webhook con el mismo key.id no duplica ni da 500', async () => {
-    // la conversación de María, que ya existe por los fixtures anteriores
-    const list = await inboxList(mainCookie)
-    const conv = list.items.find((i) => i.waJid === '573001112233@s.whatsapp.net')!
+    // conversación creada por este test: la carrera no reusa la de los fixtures
+    const raceJid = '573007778002@s.whatsapp.net'
+    const [raceContact] = await db
+      .insert(contacts)
+      .values({ userId: mainUser.id, waJid: raceJid, displayName: 'Carrera' })
+      .returning()
+    const [raceConv] = await db
+      .insert(conversations)
+      .values({ userId: mainUser.id, contactId: raceContact!.id, waJid: raceJid, lastMessageAt: new Date() })
+      .returning()
 
     evo.nextMessageId = 'RACE-1'
-    const reply = await inject(app, 'POST', `/inbox/conversations/${conv.id}/messages`, {
+    const reply = await inject(app, 'POST', `/inbox/conversations/${raceConv!.id}/messages`, {
       body: { text: 'va la dirección' },
       cookie: mainCookie,
     })
     expect(reply.status).toBe(200)
     expect(reply.body.ok).toBe(true)
-    expect(reply.body.message.body).toBe('va la dirección')
+    const sent = reply.body.message as { body: string | null }
+    expect(sent.body).toBe('va la dirección')
     // presencia antes del envío: mitigación de baneo
     expect(evo.calls.filter((c) => c === 'presence').length).toBeGreaterThanOrEqual(1)
 
     // el webhook llega después con el mismo key.id: ON CONFLICT DO NOTHING
     const echoed = {
       ...fromMeText,
-      key: { ...fromMeText.key, remoteJid: '573001112233@s.whatsapp.net', id: 'RACE-1' },
+      key: { ...fromMeText.key, remoteJid: raceJid, id: 'RACE-1' },
       message: { extendedTextMessage: { text: 'va la dirección' } },
     }
     const web = await deliver(upsertEvent(instance, echoed))
@@ -330,7 +374,7 @@ describe('inbox: respuesta y carrera webhook', () => {
 
     // y la conversación sigue respondiendo normal
     evo.nextMessageId = 'OUT-NEXT'
-    const second = await inject(app, 'POST', `/inbox/conversations/${conv.id}/messages`, {
+    const second = await inject(app, 'POST', `/inbox/conversations/${raceConv!.id}/messages`, {
       body: { text: 'segundo mensaje' },
       cookie: mainCookie,
     })
@@ -408,21 +452,23 @@ describe('paginación keyset', () => {
 
     const first = await inject(app, 'GET', `/inbox/conversations/${conv!.id}/messages`, { cookie })
     expect(first.status).toBe(200)
-    expect(first.body.messages.length).toBe(PAGE)
-    expect(first.body.nextCursor).toBeTruthy()
+    const firstBody = first.body as { messages: Array<{ id: string }>; nextCursor: string | null }
+    expect(firstBody.messages.length).toBe(PAGE)
+    expect(firstBody.nextCursor).toBeTruthy()
 
     const second = await inject(
       app,
       'GET',
-      `/inbox/conversations/${conv!.id}/messages?cursor=${encodeURIComponent(first.body.nextCursor)}`,
+      `/inbox/conversations/${conv!.id}/messages?cursor=${encodeURIComponent(firstBody.nextCursor!)}`,
       { cookie },
     )
     expect(second.status).toBe(200)
-    expect(second.body.messages.length).toBe(5)
-    expect(second.body.nextCursor).toBeNull()
+    const secondBody = second.body as { messages: Array<{ id: string }>; nextCursor: string | null }
+    expect(secondBody.messages.length).toBe(5)
+    expect(secondBody.nextCursor).toBeNull()
 
-    const ids1 = new Set((first.body.messages as Array<{ id: string }>).map((m) => m.id))
-    for (const m of second.body.messages) expect(ids1.has(m.id)).toBe(false)
+    const ids1 = new Set(firstBody.messages.map((m) => m.id))
+    for (const m of secondBody.messages) expect(ids1.has(m.id)).toBe(false)
   })
 
   it('conversaciones: hay segunda página y no repite conversaciones', async () => {
@@ -440,20 +486,22 @@ describe('paginación keyset', () => {
 
     const first = await inject(app, 'GET', '/inbox/conversations', { cookie })
     expect(first.status).toBe(200)
-    expect(first.body.items.length).toBe(PAGE)
-    expect(first.body.nextCursor).toBeTruthy()
+    const firstBody = first.body as { items: Array<{ id: string }>; nextCursor: string | null }
+    expect(firstBody.items.length).toBe(PAGE)
+    expect(firstBody.nextCursor).toBeTruthy()
 
     const second = await inject(
       app,
       'GET',
-      `/inbox/conversations?cursor=${encodeURIComponent(first.body.nextCursor)}`,
+      `/inbox/conversations?cursor=${encodeURIComponent(firstBody.nextCursor!)}`,
       { cookie },
     )
     expect(second.status).toBe(200)
-    expect(second.body.items.length).toBe(2)
-    expect(second.body.nextCursor).toBeNull()
+    const secondBody = second.body as { items: Array<{ id: string }>; nextCursor: string | null }
+    expect(secondBody.items.length).toBe(2)
+    expect(secondBody.nextCursor).toBeNull()
 
-    const ids1 = new Set((first.body.items as Array<{ id: string }>).map((c) => c.id))
-    for (const c of second.body.items) expect(ids1.has(c.id)).toBe(false)
+    const ids1 = new Set(firstBody.items.map((c) => c.id))
+    for (const c of secondBody.items) expect(ids1.has(c.id)).toBe(false)
   })
 })
