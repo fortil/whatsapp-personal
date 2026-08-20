@@ -1,0 +1,100 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Los despliegues se encolan, nunca se pisan: un rollout a mitad de migración
+# es justo lo que este lock evita.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  # Cero drift: el mismo CI que protege las ramas protege el deploy.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  images:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      owner: ${{ steps.owner.outputs.owner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Owner en minúsculas (ghcr lo exige)
+        id: owner
+        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: api y worker (misma imagen, dos tags de APP)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: APP=api
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.owner }}/wp-api:latest
+            ghcr.io/${{ steps.owner.outputs.owner }}/wp-api:${{ github.sha }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: APP=worker
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.owner }}/wp-worker:latest
+            ghcr.io/${{ steps.owner.outputs.owner }}/wp-worker:${{ github.sha }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/panel/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.owner }}/wp-panel:latest
+            ghcr.io/${{ steps.owner.outputs.owner }}/wp-panel:${{ github.sha }}
+
+  deploy:
+    needs: images
+    runs-on: ubuntu-latest
+    env:
+      SSH_KEY: ${{ secrets.ECS_SSH_KEY }}
+      ECS_HOST: ${{ secrets.ECS_HOST }}
+      ECS_USER: ${{ secrets.ECS_USER }}
+      OWNER: ${{ needs.images.outputs.owner }}
+      SHA: ${{ github.sha }}
+      REMOTE_DIR: /opt/whatsapp-personal
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preparar SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$ECS_HOST" >> ~/.ssh/known_hosts
+      - name: rsync de configuración (sin --delete)
+        run: |
+          rsync -az --mkpath -e "ssh -i ~/.ssh/id_ed25519" \
+            docker-compose.yml docker-compose.prod.yml Caddyfile \
+            "$ECS_USER@$ECS_HOST:$REMOTE_DIR/"
+          rsync -az --mkpath -e "ssh -i ~/.ssh/id_ed25519" \
+            infra/ "$ECS_USER@$ECS_HOST:$REMOTE_DIR/infra/"
+      - name: rsync de assets estáticos (con --delete, solo si existen)
+        run: |
+          if [ -d apps/panel/public ]; then
+            rsync -az --delete -e "ssh -i ~/.ssh/id_ed25519" \
+              apps/panel/public/ "$ECS_USER@$ECS_HOST:$REMOTE_DIR/apps/panel/public/"
+          else
+            echo "sin assets estáticos que sincronizar"
+          fi
+      - name: Desplegar (backup, migraciones, rollout, gate de salud)
+        run: |
+          ssh -i ~/.ssh/id_ed25519 "$ECS_USER@$ECS_HOST" \
+            "cd $REMOTE_DIR && TAG=$SHA IMAGE_OWNER=$OWNER bash infra/deploy/deploy.sh"

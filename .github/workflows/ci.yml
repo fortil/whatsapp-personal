@@ -1,0 +1,82 @@
+name: CI
+
+# Sin ningún secret: corre igual en forks y en PRs de cualquiera.
+# deploy.yml lo reusa por workflow_call para que CI y deploy no deriven.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: whatsapp_personal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/whatsapp_personal
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-jwt-secret-no-es-productivo
+      WEBHOOK_SECRET: ci-webhook-secret-no-es-productivo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Esperar postgres y redis
+        run: |
+          for i in $(seq 1 30); do (echo > /dev/tcp/localhost/5432) 2>/dev/null && break; sleep 2; done
+          for i in $(seq 1 30); do (echo > /dev/tcp/localhost/6379) 2>/dev/null && break; sleep 2; done
+          (echo > /dev/tcp/localhost/5432) && (echo > /dev/tcp/localhost/6379)
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm -r typecheck
+      - run: pnpm db-migrate
+      - run: pnpm -r test
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar el compose de desarrollo
+        run: docker compose -f docker-compose.yml config > /dev/null
+      - name: Crear .env vacío
+        # api y worker declaran env_file: .env en el overlay de producción y
+        # compose exige que el archivo exista para validar la config, aunque
+        # esté vacío. En un checkout limpio no hay .env: está en .gitignore.
+        run: touch .env
+      - name: Validar el compose de producción (base + overlay)
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml config > /dev/null
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Smoke de docker build (sin push)
+        run: |
+          docker build --build-arg APP=api -t wp-api:ci .
+          docker build --build-arg APP=worker -t wp-worker:ci .
+          docker build -f apps/panel/Dockerfile -t wp-panel:ci .

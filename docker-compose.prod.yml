@@ -1,0 +1,141 @@
+# Overlay de producción sobre docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml <cmd>
+#
+# - `ports: !reset []` borra las publicaciones de la base: solo Caddy expone
+#   80/443. Ni postgres, ni redis, ni el 8080 de Evolution salen del host.
+# - Añade api, worker, panel y caddy. El worker usa la MISMA imagen que la
+#   api con APP=worker (una sola imagen, dos servicios).
+# - La rotación de logs de la base se hereda; los servicios nuevos la traen
+#   con el mismo anchor.
+#
+# Variables que se fijan en el .env del servidor (ver docs/despliegue.md):
+#   IMAGE_OWNER  dueño de las imágenes ghcr.io (default fortil)
+#   TAG          el sha que publicó el workflow (deploy.sh lo exporta)
+#   DOMAIN       dominio desnudo, ej. midominio.com
+#   POSTGRES_PASSWORD  distinta de "postgres" en producción
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    restart: unless-stopped
+
+  redis:
+    ports: !reset []
+    restart: unless-stopped
+
+  evolution:
+    ports: !reset []
+    environment:
+      # la contraseña vive en el mismo postgres que la app
+      DATABASE_CONNECTION_URI: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/evolution
+    restart: unless-stopped
+
+  api:
+    image: ghcr.io/${IMAGE_OWNER:-fortil}/wp-api:${TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/whatsapp_personal
+      REDIS_URL: redis://redis:6379
+      EVOLUTION_API_URL: http://evolution:8080
+      # adonde Evolution (otro contenedor) entrega el webhook: por Caddy, HTTPS
+      PUBLIC_API_URL: https://api.${DOMAIN:-localhost}
+      API_PORT: "3001"
+      EXPORT_DIR: /data/exports
+    volumes:
+      - appdata:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    # 127.0.0.1 y no localhost: el wget de busybox resuelve localhost como ::1
+    # y Fastify escucha en IPv4 (lección heredada de whatsapp-agent).
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    logging: *default-logging
+
+  worker:
+    image: ghcr.io/${IMAGE_OWNER:-fortil}/wp-worker:${TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP: worker
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/whatsapp_personal
+      REDIS_URL: redis://redis:6379
+      EVOLUTION_API_URL: http://evolution:8080
+      WORKER_PORT: "3002"
+      EXPORT_DIR: /data/exports
+    volumes:
+      # el mismo volumen que la api: el worker escribe el xlsx, la api lo sirve
+      - appdata:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3002/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    logging: *default-logging
+
+  panel:
+    image: ghcr.io/${IMAGE_OWNER:-fortil}/wp-panel:${TAG:-latest}
+    restart: unless-stopped
+    environment:
+      # el panel llama a la api server-side (Server Actions): por la red
+      # interna del compose, sin salir por Caddy
+      API_URL: http://api:3001
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      # /login es pública; la raíz redirige y también vale, pero así no
+      # dependemos del redirect
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/login >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    logging: *default-logging
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # los certificados de Let's Encrypt sobreviven reinicios y redeploys
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      panel:
+        condition: service_started
+    logging: *default-logging
+
+volumes:
+  appdata:
+  caddy_data:
+  caddy_config:

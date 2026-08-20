@@ -1,0 +1,63 @@
+# Log rotation para TODOS los servicios: sin esto los logs llenan el disco.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wp-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: whatsapp_personal
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # pgcrypto + CREATE DATABASE evolution (la app y Evolution comparten postgres)
+      - ./infra/postgres-init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      # 127.0.0.1 explícito: en contenedores "localhost" puede resolver a ::1
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d whatsapp_personal"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    container_name: wp-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    logging: *default-logging
+
+  evolution:
+    image: evoapicloud/evolution-api:v2.3.7
+    container_name: wp-evolution
+    ports:
+      - "8080:8080"
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-dev-evolution-key}
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://postgres:postgres@postgres:5432/evolution
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/0
+      CACHE_REDIS_PREFIX_KEY: evolution
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    logging: *default-logging
+
+volumes:
+  pgdata:
