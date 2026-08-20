@@ -1,12 +1,23 @@
 name: CI
 
 # Sin ningún secret: corre igual en forks y en PRs de cualquiera.
+# No arranca solo. Los PRs lo piden por comentario (ci-a-peticion.yml) y
 # deploy.yml lo reusa por workflow_call para que CI y deploy no deriven.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_call:
+    inputs:
+      ref:
+        description: Commit o rama a comprobar. Vacío = el ref del evento.
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit o rama a comprobar. Vacío = la rama por defecto.
+        type: string
+        required: false
+        default: ''
 
 jobs:
   verify:
@@ -41,6 +52,8 @@ jobs:
       WEBHOOK_SECRET: ci-webhook-secret-no-es-productivo
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -61,6 +74,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - name: Validar el compose de desarrollo
         run: docker compose -f docker-compose.yml config > /dev/null
       - name: Crear .env vacío
@@ -75,6 +90,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - name: Smoke de docker build (sin push)
         run: |
           docker build --build-arg APP=api -t wp-api:ci .

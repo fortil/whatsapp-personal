@@ -1,0 +1,103 @@
+name: CI a petición
+
+# CI ya no arranca solo en cada push ni en cada PR. Lo pide una persona con
+# permiso de escritura escribiendo /ci en un comentario del PR, y solo corre si
+# la rama del PR empieza por feat/.
+#
+# El evento issue_comment siempre ejecuta el workflow de la rama por defecto y
+# apunta a su HEAD, así que el commit del PR hay que resolverlo a mano y pasarlo
+# como ref: sin eso CI comprobaría main y diría que todo está bien.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+  statuses: write
+
+jobs:
+  compuerta:
+    # author_association evita la llamada extra a la API de colaboradores, que
+    # el GITHUB_TOKEN no siempre puede hacer.
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/ci') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    outputs:
+      correr: ${{ steps.decidir.outputs.correr }}
+      sha: ${{ steps.decidir.outputs.sha }}
+    steps:
+      - name: Resolver el PR y decidir
+        id: decidir
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+          BODY: ${{ github.event.comment.body }}
+          COMENTARIO: ${{ github.event.comment.id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          echo "correr=false" >> "$GITHUB_OUTPUT"
+
+          # /cinema no es /ci
+          comando=$(printf '%s' "$BODY" | tr -d '\r' | head -n1 | awk '{print $1}')
+          if [ "$comando" != "/ci" ]; then
+            echo "el comentario empieza por '$comando', no por '/ci'"
+            exit 0
+          fi
+
+          rama=$(gh api "repos/$REPO/pulls/$PR" --jq .head.ref)
+          sha=$(gh api "repos/$REPO/pulls/$PR" --jq .head.sha)
+          echo "rama del PR: $rama ($sha)"
+
+          case "$rama" in
+            feat/*) ;;
+            *)
+              gh api -X POST "repos/$REPO/issues/$PR/comments" \
+                -f body="CI solo corre en ramas \`feat/\`. Esta es \`$rama\`." > /dev/null
+              exit 0
+              ;;
+          esac
+
+          {
+            echo "correr=true"
+            echo "sha=$sha"
+          } >> "$GITHUB_OUTPUT"
+
+          gh api -X POST "repos/$REPO/issues/comments/$COMENTARIO/reactions" \
+            -f content=rocket > /dev/null
+          gh api -X POST "repos/$REPO/statuses/$sha" \
+            -f state=pending -f context="CI a petición" \
+            -f description="en cola" -f target_url="$RUN_URL" > /dev/null
+
+  ci:
+    needs: compuerta
+    if: needs.compuerta.outputs.correr == 'true'
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.compuerta.outputs.sha }}
+
+  estado:
+    # El PR no ve el resultado por su cuenta: los runs de issue_comment no
+    # cuelgan de su commit. Se lo colgamos nosotros.
+    needs: [compuerta, ci]
+    if: always() && needs.compuerta.outputs.correr == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publicar el estado en el commit del PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ needs.compuerta.outputs.sha }}
+          RESULTADO: ${{ needs.ci.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$RESULTADO" = "success" ]; then estado=success; else estado=failure; fi
+          gh api -X POST "repos/$REPO/statuses/$SHA" \
+            -f state="$estado" -f context="CI a petición" \
+            -f description="$RESULTADO" -f target_url="$RUN_URL" > /dev/null

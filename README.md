@@ -66,7 +66,7 @@ WhatsApp real; con `EVOLUTION_API_URL`/`EVOLUTION_API_KEY` vacíos las rutas
 | `infra/` | `postgres-init.sql` (pgcrypto y base `evolution`) y `infra/deploy/`: scripts de despliegue, backup y restore drill. |
 | `docs/` | Guías de operación: `mac-mini-setup.md`, `proveedores.md`, `despliegue.md` (runbook de producción). |
 | `Dockerfile`, `apps/panel/Dockerfile` | Imagen única para api/worker (`ARG APP`) y panel Next.js standalone. |
-| `.github/workflows/` | `ci.yml` (build, typecheck, test, validación de compose, smoke de build) y `deploy.yml` (publica en ghcr.io y despliega por SSH en push a `main`). |
+| `.github/workflows/` | `ci.yml` (build, typecheck, test, validación de compose, smoke de build), `ci-a-peticion.yml` (lo dispara un `/ci` en el PR) y `deploy.yml` (publica en ghcr.io y despliega por SSH en push a `main`). |
 
 ## Variables de entorno
 
@@ -117,3 +117,7 @@ meses, por eso viven escritos.
   `pending` de más de 10 minutos y borra exports con más de 30 días.
 - Despliegue, backups y restore drill: runbook completo en
   `docs/despliegue.md`.
+- CI no arranca solo. Para lanzarlo, comenta `/ci` en el PR: solo responde en
+  ramas `feat/` y solo a quien tiene permiso de escritura. El resultado vuelve
+  al PR como estado `CI a petición` sobre el último commit. Para correrlo fuera
+  de un PR, `workflow_dispatch` en la pestaña Actions.
