@@ -2,16 +2,17 @@
 
 import { useActionState } from 'react'
 import { transcribeAction } from './actions'
-import { mergeTranscribeState, type TranscribeState } from './transcribe-state'
+import { mergeTranscribeState, transcribeView, type TranscribeState } from './transcribe-state'
 
 const initial: TranscribeState = {}
 
 /**
  * Cuatro estados del audio: none → botón, pending → spinner de texto, done →
- * transcripción inline, error → mensaje + botón para reintentar. El servidor
- * (props) manda en cuanto avanza más allá de 'none', así que el chip
- * "Transcribiendo…" no queda clavado cuando el AutoRefresh de 5 s trae done o
- * error: ver `mergeTranscribeState`.
+ * transcripción inline (o aviso de "sin voz" si el ASR no detectó habla),
+ * error → mensaje + botón para reintentar. El servidor (props) manda en
+ * cuanto avanza más allá de 'none', así que el chip "Transcribiendo…" no
+ * queda clavado cuando el AutoRefresh de 5 s trae done o error: ver
+ * `mergeTranscribeState` y `transcribeView`.
  */
 export default function TranscribeButton({
   messageId,
@@ -30,8 +31,9 @@ export default function TranscribeButton({
     transcript,
     state,
   )
+  const view = transcribeView(effectiveStatus, effectiveTranscript)
 
-  if (effectiveStatus === 'done' && effectiveTranscript) {
+  if (view === 'transcript') {
     return (
       <div className="transcript-block">
         <p className="transcript-text">{effectiveTranscript}</p>
@@ -39,7 +41,15 @@ export default function TranscribeButton({
     )
   }
 
-  if (pending || effectiveStatus === 'pending') {
+  if (view === 'no-voice') {
+    return (
+      <div className="transcript-block">
+        <p className="transcript-text">No se detectó voz en el audio.</p>
+      </div>
+    )
+  }
+
+  if (pending || view === 'pending') {
     return (
       <div className="transcript-block">
         <span className="chip">Transcribiendo…</span>

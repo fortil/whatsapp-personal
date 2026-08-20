@@ -220,7 +220,7 @@ describe('POST /inbox/messages/:id/transcribe', () => {
   it('GET messages expone transcript y transcript_status para el panel', async () => {
     const res = await inject(app, 'GET', `/inbox/conversations/${conversationId}/messages`, { cookie })
     expect(res.status).toBe(200)
-    const audio = res.body.messages.find((m: { id: string }) => m.id === audioMsg.id)
+    const audio = (res.body.messages as Array<{ id: string; transcriptStatus: string; transcript: string | null }>).find((m) => m.id === audioMsg.id)!
     expect(audio.transcriptStatus).toBe('pending')
     expect(audio.transcript).toBeNull()
   })

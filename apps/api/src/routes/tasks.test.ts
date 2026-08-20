@@ -84,12 +84,12 @@ describe('GET /tasks', () => {
   it('solo trae las tareas del usuario dueño de la sesión', async () => {
     const res = await inject(app, 'GET', '/tasks', { cookie: cookieA })
     expect(res.status).toBe(200)
-    const ids = res.body.items.map((t: { id: string }) => t.id)
+    const ids = (res.body.items as Array<{ id: string }>).map((t) => t.id)
     expect(ids).toContain(doneTaskId)
     expect(ids).toContain(runningTaskId)
 
     const resB = await inject(app, 'GET', '/tasks', { cookie: cookieB })
-    expect(resB.body.items.map((t: { id: string }) => t.id)).not.toContain(doneTaskId)
+    expect((resB.body.items as Array<{ id: string }>).map((t) => t.id)).not.toContain(doneTaskId)
   })
 })
 

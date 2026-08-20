@@ -136,7 +136,7 @@ describe('con credenciales de Google', () => {
   it('connect devuelve la URL de consentimiento con state JWT de 10 min atado al usuario', async () => {
     const res = await inject(app, 'GET', '/google/connect', { cookie })
     expect(res.status).toBe(200)
-    const url = new URL(res.body.url)
+    const url = new URL(res.body.url as string)
     expect(`${url.origin}${url.pathname}`).toBe('https://accounts.google.com/o/oauth2/v2/auth')
     expect(url.searchParams.get('access_type')).toBe('offline')
     expect(url.searchParams.get('prompt')).toBe('consent')

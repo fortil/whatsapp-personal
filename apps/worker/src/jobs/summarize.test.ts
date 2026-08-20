@@ -14,11 +14,11 @@ import type { EvolutionClient } from '@wp/channels'
 import type { LlmClient } from '@wp/llm'
 import {
   COLD_START_WINDOW_DAYS,
-  INPUT_TOKEN_CAP,
   NEW_MESSAGES_THRESHOLD,
   estimateTokens,
   extractHistoryMessages,
   historyMessageRow,
+  REDUCE_MAX_ROUNDS,
   renderMessage,
   splitUnderCap,
   summarizeConversation,
@@ -88,6 +88,19 @@ async function seedMessage(opts: {
     })
     .returning()
   return row!
+}
+
+/** Conversación propia del test: siembra la suya para poder correr solo (-t). */
+async function seedConversation(waJid: string, displayName: string): Promise<string> {
+  const [contact] = await db
+    .insert(contacts)
+    .values({ userId, waJid, displayName })
+    .returning()
+  const [conv] = await db
+    .insert(conversations)
+    .values({ userId, contactId: contact!.id, waJid })
+    .returning()
+  return conv!.id
 }
 
 beforeAll(async () => {
@@ -262,6 +275,31 @@ describe('summarizeConversation', () => {
         message: { extendedTextMessage: { text: 'segundo del historial' } },
         messageTimestamp: 1786000100,
       },
+      {
+        key: { id: `COLD-AUDIO-${RUN}`, remoteJid: '573006667799@s.whatsapp.net' },
+        message: { audioMessage: { mimetype: 'audio/ogg; codecs=opus', seconds: 8 } },
+        messageTimestamp: 1786000200,
+      },
+      {
+        key: { id: `COLD-IMAGE-${RUN}`, remoteJid: '573006667799@s.whatsapp.net' },
+        message: { imageMessage: { mimetype: 'image/jpeg' } },
+        messageTimestamp: 1786000300,
+      },
+      {
+        key: { id: `COLD-VIDEO-${RUN}`, remoteJid: '573006667799@s.whatsapp.net' },
+        message: { videoMessage: { mimetype: 'video/mp4', seconds: 12 } },
+        messageTimestamp: 1786000400,
+      },
+      {
+        key: { id: `COLD-DOC-${RUN}`, remoteJid: '573006667799@s.whatsapp.net' },
+        message: { documentMessage: { filename: 'notas.pdf', mimetype: 'application/pdf' } },
+        messageTimestamp: 1786000500,
+      },
+      {
+        key: { id: `COLD-STICKER-${RUN}`, remoteJid: '573006667799@s.whatsapp.net' },
+        message: { stickerMessage: { mimetype: 'image/webp' } },
+        messageTimestamp: 1786000600,
+      },
     ]
     let page = 0
     const evolution: EvolutionClient = {
@@ -301,9 +339,27 @@ describe('summarizeConversation', () => {
       .select()
       .from(messages)
       .where(eq(messages.conversationId, convNoHistoryId))
-    expect(inserted.length).toBe(2)
+    expect(inserted.length).toBe(7)
+    // cada rama de tipo de historyMessageRow deja la fila con su type y sin body
+    const byExternal = new Map(inserted.map((m) => [m.externalId, m.type]))
+    expect(byExternal.get(`COLD-1-${RUN}`)).toBe('text')
+    expect(byExternal.get(`COLD-2-${RUN}`)).toBe('text')
+    expect(byExternal.get(`COLD-AUDIO-${RUN}`)).toBe('audio')
+    expect(byExternal.get(`COLD-IMAGE-${RUN}`)).toBe('image')
+    expect(byExternal.get(`COLD-VIDEO-${RUN}`)).toBe('video')
+    expect(byExternal.get(`COLD-DOC-${RUN}`)).toBe('document')
+    expect(byExternal.get(`COLD-STICKER-${RUN}`)).toBe('sticker')
+    for (const m of inserted) {
+      if (m.type !== 'text') expect(m.body).toBeNull()
+    }
+    // y en el transcript del resumen los medios entran como chips de tipo
     expect(llm.prompts[0]).toContain('primero del historial')
     expect(llm.prompts[0]).toContain('segundo del historial')
+    expect(llm.prompts[0]).toContain('[audio]')
+    expect(llm.prompts[0]).toContain('[image]')
+    expect(llm.prompts[0]).toContain('[video]')
+    expect(llm.prompts[0]).toContain('[document]')
+    expect(llm.prompts[0]).toContain('[sticker]')
 
     const conv = (await db.select().from(conversations).where(eq(conversations.id, convNoHistoryId)).limit(1))[0]!
     expect(conv.summary).toBe('resumen del historial')
@@ -339,40 +395,60 @@ describe('summarizeConversation', () => {
   })
 
   it('umbral: menos de 20 mensajes nuevos no re-resume', async () => {
+    // conversación propia: el umbral se prueba sobre un summary que este test
+    // sembró, no sobre el watermark que deje otro
+    const ownConvId = await seedConversation('573006667703@s.whatsapp.net', 'Umbral')
+    await seedMessage({ conversationId: ownConvId, externalId: `S-TH-BASE-${RUN}`, body: 'base del umbral' })
+    const base = fakeLlm(() => 'resumen base')
+    expect((await summarizeConversation(userId, ownConvId, {}, { db, llm: base, evolution: null })).status).toBe(
+      'done',
+    )
+
     for (let i = 0; i < 5; i += 1) {
-      await seedMessage({ externalId: `S-TH5-${i}-${RUN}`, body: `nuevo ${i}`, createdAt: minutes(20 - i) })
+      await seedMessage({ conversationId: ownConvId, externalId: `S-TH5-${i}-${RUN}`, body: `nuevo ${i}` })
     }
     const llm = fakeLlm(() => 'no debería usarse')
-    const result = await summarizeConversation(userId, convId, {}, { db, llm, evolution: null })
+    const result = await summarizeConversation(userId, ownConvId, {}, { db, llm, evolution: null })
     expect(result.status).toBe('skipped-threshold')
     expect(llm.prompts.length).toBe(0)
-    const conv = (await db.select().from(conversations).where(eq(conversations.id, convId)).limit(1))[0]!
-    expect(conv.summary).toBe('primer resumen')
+    const conv = (await db.select().from(conversations).where(eq(conversations.id, ownConvId)).limit(1))[0]!
+    expect(conv.summary).toBe('resumen base')
   })
 
   it('force pisa el umbral: resume aunque falten mensajes para el umbral', async () => {
+    const ownConvId = await seedConversation('573006667704@s.whatsapp.net', 'Forzado')
+    await seedMessage({ conversationId: ownConvId, externalId: `S-F-BASE-${RUN}`, body: 'base del force' })
+    await summarizeConversation(userId, ownConvId, {}, { db, llm: fakeLlm(() => 'resumen base'), evolution: null })
+    await seedMessage({ conversationId: ownConvId, externalId: `S-F-NEW-${RUN}`, body: 'llegó algo nuevo' })
+
     const llm = fakeLlm(() => 'resumen forzado')
-    const result = await summarizeConversation(userId, convId, { force: true }, { db, llm, evolution: null })
+    const result = await summarizeConversation(userId, ownConvId, { force: true }, { db, llm, evolution: null })
     expect(result.status).toBe('done')
     expect(llm.prompts.length).toBe(1)
     expect(llm.prompts[0]).toContain('Resumen anterior de la conversación')
   })
 
   it('EL CASO DE ACEPTACIÓN: mensaje tardío (sent_at viejo, created_at nuevo) entra al siguiente resumen', async () => {
-    // el watermark quedó en el force anterior; el mensaje tardío llega ahora
-    // con sent_at de hace 40 días
+    const ownConvId = await seedConversation('573006667705@s.whatsapp.net', 'Tardío')
+    // primer resumen propio: deja el summary y el watermark sobre los que
+    // llega el tardío
+    await seedMessage({ conversationId: ownConvId, externalId: `S-LATE-BASE-${RUN}`, body: 'base antes del tardío' })
+    await summarizeConversation(userId, ownConvId, {}, { db, llm: fakeLlm(() => 'resumen base'), evolution: null })
+
+    // el mensaje tardío llega ahora con sent_at de hace 40 días
     await seedMessage({
+      conversationId: ownConvId,
       externalId: `S-LATE-${RUN}`,
       body: 'mensaje offline que llegó tarde',
       sentAt: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
     })
     // completa el lote hasta cruzar el umbral de 20
     for (let i = 0; i < NEW_MESSAGES_THRESHOLD; i += 1) {
-      await seedMessage({ externalId: `S-BURST-${i}-${RUN}`, body: `mensaje nuevo ${i}`, createdAt: minutes(15) })
+      await seedMessage({ conversationId: ownConvId, externalId: `S-BURST-${i}-${RUN}`, body: `mensaje nuevo ${i}` })
     }
 
     const llm = fakeLlm(() => 'resumen con el tardío')
-    const result = await summarizeConversation(userId, convId, {}, { db, llm, evolution: null })
+    const result = await summarizeConversation(userId, ownConvId, {}, { db, llm, evolution: null })
     expect(result.status).toBe('done')
     expect(llm.prompts.length).toBe(1)
     expect(llm.prompts[0]).toContain('mensaje offline que llegó tarde')
@@ -384,15 +460,15 @@ describe('summarizeConversation', () => {
       await db
         .select()
         .from(messages)
-        .where(and(eq(messages.conversationId, convId), eq(messages.externalId, `S-LATE-${RUN}`)))
+        .where(and(eq(messages.conversationId, ownConvId), eq(messages.externalId, `S-LATE-${RUN}`)))
         .limit(1)
     )[0]!
-    const conv = (await db.select().from(conversations).where(eq(conversations.id, convId)).limit(1))[0]!
+    const conv = (await db.select().from(conversations).where(eq(conversations.id, ownConvId)).limit(1))[0]!
     expect(conv.summary).toBe('resumen con el tardío')
     expect(conv.summaryThruCreatedAt!.getTime()).toBeGreaterThanOrEqual(late.createdAt.getTime())
 
     const llm2 = fakeLlm(() => 'segunda pasada')
-    const again = await summarizeConversation(userId, convId, {}, { db, llm: llm2, evolution: null })
+    const again = await summarizeConversation(userId, ownConvId, {}, { db, llm: llm2, evolution: null })
     expect(again.status).toBe('skipped-empty')
     expect(llm2.prompts.length).toBe(0)
   })
@@ -440,6 +516,100 @@ describe('summarizeConversation', () => {
 
     const row = (await db.select().from(conversations).where(eq(conversations.id, conv!.id)).limit(1))[0]!
     expect(row.summary).toBe('resumen final integrado')
+  })
+
+  it('reducción del map-reduce: los parciales que no caben se agrupan y se reducen por rondas', async () => {
+    const ownConvId = await seedConversation('573006667706@s.whatsapp.net', 'Reducción')
+    // 12 mensajes de ~103 tokens con tope 400: 4 fragmentos de 3 líneas. Cada
+    // parcial responde 480 chars (~120 tokens) y 4×120 > 400: sin ronda de
+    // integración el prompt final desbordaría el tope igual que el transcript
+    for (let i = 0; i < 12; i += 1) {
+      await seedMessage({
+        conversationId: ownConvId,
+        externalId: `S-RED-${i}-${RUN}`,
+        body: `reducción ${i} ${'r'.repeat(390)}`,
+        sentAt: minutes(60 - i),
+        createdAt: minutes(60 - i),
+      })
+    }
+    const llm = fakeLlm((prompt) => {
+      if (prompt.startsWith('Fragmento de la conversación')) return `parcial ${'p'.repeat(472)}`
+      if (prompt.startsWith('Ronda de integración')) {
+        // el grupo de 3 parciales contra el de 1: respuestas distinguibles
+        return prompt.split('\n').filter((l) => l.startsWith('parcial ')).length > 1
+          ? 'integrado primero'
+          : 'integrado segundo'
+      }
+      return 'resumen final integrado'
+    })
+    const cap = 400
+    const result = await summarizeConversation(userId, ownConvId, {}, { db, llm, evolution: null, tokenCap: cap })
+    expect(result.status).toBe('done')
+
+    const maps = llm.prompts.filter((p) => p.startsWith('Fragmento de la conversación'))
+    const rounds = llm.prompts.filter((p) => p.startsWith('Ronda de integración'))
+    const finals = llm.prompts.filter((p) => p.includes('Escribe el resumen final'))
+    expect(maps.length).toBe(4)
+    // 4 parciales de 120 tokens: grupo de 3 + grupo de 1 en una ronda
+    expect(rounds.length).toBe(2)
+    expect(finals.length).toBe(1)
+    expect(result.passes).toBe(4 + 2 + 1)
+
+    // cada grupo de la ronda quedó bajo el tope...
+    for (const r of rounds) {
+      const group = r.slice(r.indexOf(':\n\n') + 3, r.lastIndexOf('\n\n'))
+      expect(estimateTokens(group)).toBeLessThanOrEqual(cap)
+    }
+    // ...y el prompt final también, con los dos integrados
+    const final = finals[0]!
+    const finalGroup = final.slice(final.indexOf(':\n\n') + 3, final.lastIndexOf('\n\n'))
+    expect(estimateTokens(finalGroup)).toBeLessThanOrEqual(cap)
+    expect(finalGroup).toContain('integrado primero')
+    expect(finalGroup).toContain('integrado segundo')
+  })
+
+  it('cota de rondas: un modelo que hace eco de su entrada no deja la reducción girando', async () => {
+    const ownConvId = await seedConversation('573006667707@s.whatsapp.net', 'Eco')
+    // mismo molde que el test de arriba: 4 fragmentos cuyos parciales juntos
+    // desbordan el tope
+    for (let i = 0; i < 12; i += 1) {
+      await seedMessage({
+        conversationId: ownConvId,
+        externalId: `S-ECO-${i}-${RUN}`,
+        body: `eco ${i} ${'c'.repeat(390)}`,
+        sentAt: minutes(60 - i),
+        createdAt: minutes(60 - i),
+      })
+    }
+    const cap = 400
+    // la ronda de integración responde 221 tokens por grupo (dos grupos = 442
+    // > 400): el tamaño no baja nunca, la reducción no converge sola
+    const echo = `eco ${'e'.repeat(879)}`
+    const llm = fakeLlm((prompt) => {
+      if (prompt.startsWith('Fragmento de la conversación')) return `parcial ${'p'.repeat(472)}`
+      if (prompt.startsWith('Ronda de integración')) return echo
+      return 'resumen final tras el eco'
+    })
+    const result = await summarizeConversation(userId, ownConvId, {}, { db, llm, evolution: null, tokenCap: cap })
+    expect(result.status).toBe('done')
+
+    const maps = llm.prompts.filter((p) => p.startsWith('Fragmento de la conversación'))
+    const rounds = llm.prompts.filter((p) => p.startsWith('Ronda de integración'))
+    const finals = llm.prompts.filter((p) => p.includes('Escribe el resumen final'))
+    expect(maps.length).toBe(4)
+    // sin la cota este test no termina: el eco mantiene el tope desbordado.
+    // Cada ronda agrupa los parciales en 2 (3 líneas + 1 la primera, 1 eco
+    // por grupo después), así que son REDUCE_MAX_ROUNDS rondas de 2 prompts
+    expect(rounds.length).toBe(REDUCE_MAX_ROUNDS * 2)
+    expect(finals.length).toBe(1)
+    expect(result.passes).toBe(4 + REDUCE_MAX_ROUNDS * 2 + 1)
+
+    // la salida de emergencia es el recorte: el prompt final queda bajo el
+    // tope con los parciales (eco) más recientes
+    const final = finals[0]!
+    const finalGroup = final.slice(final.indexOf(':\n\n') + 3, final.lastIndexOf('\n\n'))
+    expect(estimateTokens(finalGroup)).toBeLessThanOrEqual(cap)
+    expect(finalGroup).toContain('eco ')
   })
 
   it('incremental desbordado: una sola pasada con los más viejos recortados', async () => {
@@ -540,11 +710,5 @@ describe('summarizeConversation', () => {
     await expect(summarizeConversation(other!.id, convId, {}, { db, llm, evolution: null })).rejects.toThrow(
       /no existe para este usuario/,
     )
-  })
-})
-
-describe('tope por defecto', () => {
-  it('INPUT_TOKEN_CAP ronda los 12k tokens', () => {
-    expect(INPUT_TOKEN_CAP).toBe(12_000)
   })
 })

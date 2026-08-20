@@ -100,7 +100,7 @@ describe('GET /contacts', () => {
   it('solo trae contactos canónicos del usuario dueño de la sesión', async () => {
     const res = await inject(app, 'GET', '/contacts', { cookie: cookieA })
     expect(res.status).toBe(200)
-    const ids = res.body.items.map((c: { id: string }) => c.id)
+    const ids = (res.body.items as Array<{ id: string }>).map((c) => c.id)
     expect(ids).toContain(contactAId)
     expect(ids).not.toContain(mergedAwayId)
   })
@@ -108,14 +108,14 @@ describe('GET /contacts', () => {
   it('aislamiento: userB no ve los contactos de userA', async () => {
     const res = await inject(app, 'GET', '/contacts', { cookie: cookieB })
     expect(res.status).toBe(200)
-    const ids = res.body.items.map((c: { id: string }) => c.id)
+    const ids = (res.body.items as Array<{ id: string }>).map((c) => c.id)
     expect(ids).not.toContain(contactAId)
   })
 
   it('query filtra por nombre', async () => {
     const res = await inject(app, 'GET', '/contacts?query=Contacto%20de%20A', { cookie: cookieA })
     expect(res.status).toBe(200)
-    expect(res.body.items.some((c: { id: string }) => c.id === contactAId)).toBe(true)
+    expect((res.body.items as Array<{ id: string }>).some((c) => c.id === contactAId)).toBe(true)
   })
 })
 
@@ -134,8 +134,9 @@ describe('PATCH /contacts/:id', () => {
       body: { birthMonth: 7, birthDay: 15, birthYear: 1990 },
     })
     expect(res.status).toBe(200)
-    expect(res.body.contact.birthdaySource).toBe('manual')
-    expect(res.body.contact.birthMonth).toBe(7)
+    const contact = res.body.contact as { birthdaySource: string; birthMonth: number }
+    expect(contact.birthdaySource).toBe('manual')
+    expect(contact.birthMonth).toBe(7)
 
     const row = (await db.select().from(contacts).where(eq(contacts.id, contactAId)).limit(1))[0]!
     expect(row.birthdaySource).toBe('manual')
@@ -159,7 +160,7 @@ describe('POST /contacts/sync', () => {
     const again = await inject(app, 'POST', '/contacts/sync', { cookie: cookieA, body: {} })
     expect(again.status).toBe(409)
 
-    const task = (await db.select().from(taskRuns).where(eq(taskRuns.id, res.body.taskRunId)).limit(1))[0]!
+    const task = (await db.select().from(taskRuns).where(eq(taskRuns.id, res.body.taskRunId as string)).limit(1))[0]!
     expect(task.kind).toBe('contacts_sync')
     expect(task.userId).toBe(userIdA)
   })
@@ -183,7 +184,7 @@ describe('POST /contacts/:id/summarize', () => {
   it('con conversación: encola el resumen con force y taskRunId', async () => {
     const res = await inject(app, 'POST', `/contacts/${contactAId}/summarize`, { cookie: cookieA, body: {} })
     expect(res.status).toBe(200)
-    const task = (await db.select().from(taskRuns).where(eq(taskRuns.id, res.body.taskRunId)).limit(1))[0]!
+    const task = (await db.select().from(taskRuns).where(eq(taskRuns.id, res.body.taskRunId as string)).limit(1))[0]!
     expect(task.kind).toBe('summarize')
     void conversationAId
   })
@@ -193,7 +194,7 @@ describe('POST /contacts/export', () => {
   it('encola contacts_export con params.includeSummaries', async () => {
     const res = await inject(app, 'POST', '/contacts/export', { cookie: cookieA, body: { includeSummaries: true } })
     expect(res.status).toBe(200)
-    const task = (await db.select().from(taskRuns).where(eq(taskRuns.id, res.body.taskRunId)).limit(1))[0]!
+    const task = (await db.select().from(taskRuns).where(eq(taskRuns.id, res.body.taskRunId as string)).limit(1))[0]!
     expect(task.kind).toBe('contacts_export')
     expect(task.params).toEqual({ includeSummaries: true })
   })

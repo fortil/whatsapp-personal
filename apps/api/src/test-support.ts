@@ -104,12 +104,19 @@ function nextIp(): string {
   return `10.50.${Math.floor(ipSeq / 250) % 250}.${ipSeq % 250}`
 }
 
+/**
+ * body como JSON plano (Record<string, unknown>): el acceso directo a campos
+ * de primer nivel sigue siendo libre, y donde un test baja a campos anidados
+ * o recorre arreglos, declara la forma con un `as` en el propio test. Así el
+ * helper no propaga `any` a toda la suite. Respuestas sin JSON (204, html de
+ * error) quedan como objeto vacío en vez de null: nadie asserts sobre null.
+ */
 export async function inject(
   app: FastifyInstance,
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   url: string,
   opts: { body?: unknown; cookie?: string; headers?: Record<string, string> } = {},
-): Promise<{ status: number; body: any }> {
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await app.inject({
     method,
     url,
@@ -121,11 +128,11 @@ export async function inject(
     },
     ...(opts.body !== undefined ? { payload: JSON.stringify(opts.body) } : {}),
   })
-  let body: any = null
+  let body: Record<string, unknown> = {}
   try {
     body = res.json()
   } catch {
-    body = null
+    body = {}
   }
   return { status: res.statusCode, body }
 }

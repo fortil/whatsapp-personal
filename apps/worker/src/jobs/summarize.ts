@@ -17,6 +17,12 @@ export const COLD_START_WINDOW_DAYS = 30
 /** Umbral incremental: con menos mensajes nuevos que esto no se re-resume. */
 export const NEW_MESSAGES_THRESHOLD = 20
 export const INPUT_TOKEN_CAP = 12_000
+/**
+ * Cota de rondas de la reducción del map-reduce: un modelo que devuelva
+ * parciales tan largos como su entrada haría girar la reducción para siempre;
+ * tras esta cantidad de rondas se recorta en vez de reducir otra vez.
+ */
+export const REDUCE_MAX_ROUNDS = 3
 /** Estimación conservadora para español; sirve para el tope, no para facturar. */
 export const CHARS_PER_TOKEN = 4
 /** Arranque en frío vía findMessages: la paginación de Evolution no es confiable. */
@@ -342,19 +348,56 @@ export async function summarizeConversation(
     )
     passes = 1
   } else {
-    // primera pasada completa que no cabe: map-reduce en dos pasadas
+    // primera pasada completa que no cabe: map-reduce. La reducción también
+    // respeta el tope: con muchos fragmentos, concatenar todos los parciales
+    // desbordaría el prompt final igual que el transcript original (y Ollama
+    // lo recorta en silencio), así que se agrupan y se reducen por rondas
+    // hasta que la pasada final quepa. Las rondas tienen cota: un modelo que
+    // devuelva parciales tan largos como su entrada dejaría el bucle sin
+    // salida, y tras REDUCE_MAX_ROUNDS se recorta igual que el desborde
+    // incremental.
     const chunks = splitUnderCap(transcript, tokenCap)
     const partials: string[] = []
     for (const chunk of chunks) {
       partials.push(await generate(llm, SUMMARY_SYSTEM_PARTIAL, `Fragmento de la conversación:\n${chunk}\n\nEscribe el resumen parcial.`, usage))
     }
+    passes = partials.length
+    let toReduce = partials.join('\n\n')
+    let rounds = 0
+    while (estimateTokens(toReduce) > tokenCap) {
+      if (rounds >= REDUCE_MAX_ROUNDS) {
+        const trimmed = trimOldestLines(toReduce, tokenCap)
+        if (trimmed.dropped > 0) {
+          console.log(
+            `[summarize] reducción cerrada tras ${rounds} ronda(s): ${trimmed.dropped} línea(s) de parciales recortada(s) para caber en ${tokenCap} tokens`,
+          )
+        }
+        toReduce = trimmed.text
+        break
+      }
+      rounds += 1
+      const groups = splitUnderCap(toReduce, tokenCap)
+      const reduced: string[] = []
+      for (const group of groups) {
+        reduced.push(
+          await generate(
+            llm,
+            SUMMARY_SYSTEM_PARTIAL,
+            `Ronda de integración. Resúmenes parciales previos, en orden cronológico:\n\n${group}\n\nReemplaza este grupo de parciales por un único resumen parcial que los integre.`,
+            usage,
+          ),
+        )
+      }
+      passes += groups.length
+      toReduce = reduced.join('\n\n')
+    }
     summary = await generate(
       llm,
       SUMMARY_SYSTEM,
-      `Resúmenes parciales de la conversación, en orden cronológico:\n\n${partials.join('\n\n')}\n\nEscribe el resumen final que integra los parciales.`,
+      `Resúmenes parciales de la conversación, en orden cronológico:\n\n${toReduce}\n\nEscribe el resumen final que integra los parciales.`,
       usage,
     )
-    passes = partials.length + 1
+    passes += 1
   }
 
   summary = summary.trim()
